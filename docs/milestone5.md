@@ -4,6 +4,10 @@
 
 ## 启动
 
+本机已安装 Docker CLI、Compose 和 Colima。重启机器后先运行 `colima start`；停止虚拟机用 `colima stop`。虚拟机配置为 2 CPU、2 GiB 内存、20 GiB 磁盘上限。
+
+本机 `apps/api/.env` 已启用本地 RAG，容器数据库已摄取 3 份 ADR（4 个片段）。直接运行 `pnpm dev` 即可使用。
+
 需要 Docker Compose（或已有 PostgreSQL + pgvector）、Ollama。仓库根目录执行：
 
 ```bash
@@ -28,9 +32,28 @@ pnpm --filter @research-lab/api rag:ingest
 pnpm dev
 ```
 
+`docker compose stop` 停止数据库并保留数据卷；下次用 `docker compose up -d --wait` 恢复。
+
+## 外部 PostgreSQL
+
+不启动 Compose，直接在 `apps/api/.env` 配置已有服务：
+
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE
+DATABASE_SSL_MODE=verify-full
+# 服务商提供私有 CA 时：
+# DATABASE_SSL_CA_FILE=/absolute/path/to/provider-ca.pem
+```
+
+密码特殊字符需 URL 编码。TLS 校验服务端证书及主机名；也可以省略 `DATABASE_SSL_MODE`，使用服务商连接串的 TLS 参数。两种配置方式不能混用。连接池与 SQL 适配器相同，无需改业务代码。
+
+服务需支持 pgvector。管理员可预先执行 `CREATE EXTENSION IF NOT EXISTS vector;`；摄取账号需要建表、读写及表锁权限。使用独立数据库或 schema，当前 `rag_*` 表只存一份资料集，重新摄取会替换它。切换服务后重新摄取并重启 API。
+
 默认摄取 `docs/decisions`。修改文档、资料目录、embedding 模型或维度后重新运行 `rag:ingest`。更换配置后重启 API。`RAG_DOCUMENT_ROOT` 可指定资料目录；相对路径以 `apps/api` 为基准。
 
 ## 验证
+
+开发侧已通过真实 PostgreSQL/Ollama HTTP 链路及 Edge 页面验收：研究完成、引用编号与展开的 ADR 原文/行号对应。重新摄取测试覆盖修改、删除和空资料集；空资料集会清空索引并返回证据不足。
 
 ```bash
 curl http://localhost:3001/api/rag/health
@@ -40,6 +63,15 @@ curl http://localhost:3001/api/rag/retrieve \
 ```
 
 健康检查应返回 `ready` 和片段数，它检查数据库及索引配置，不探测模型在线状态。页面提问同一问题，检查报告中的 `[RAG:1]` 与“检索来源”的文件、行号、原文片段对应。流式草稿在最终校验失败时不会标为完成。无命中时明确返回证据不足。
+
+真实 PostgreSQL 集成测试（创建并清理独立测试 schema，保留业务表）：
+
+```bash
+TEST_DATABASE_URL=postgresql://research:local-research@localhost:5432/research \
+  pnpm --filter @research-lab/api exec vitest run test/postgres.test.ts
+```
+
+测试账号需要建 schema 权限及已安装的 pgvector。未设置 `TEST_DATABASE_URL` 时，普通测试会跳过这组外部数据库测试。
 
 没有 Docker 时可运行 `pnpm --filter @research-lab/api rag:smoke`：读取同一模型配置，使用临时 PGlite + pgvector 和真实模型完成摄取、研究与引用检查，退出后丢弃数据库。这不验证外部 PostgreSQL 的连接与部署。
 

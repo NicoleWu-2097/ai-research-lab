@@ -42,7 +42,7 @@ const model: ModelProvider = {
   async *stream(prompt) {
     expect(prompt).toContain("untrusted evidence");
     const id = prompt.match(/"id":"(RAG:\d+)"/)?.[1];
-    yield `Use PostgreSQL 【${id}】`;
+    yield `Use PostgreSQL 【 ${id} 】 and [ ${id} ]`;
   },
 };
 
@@ -184,7 +184,7 @@ it("returns HTTP hits and streams only mapped citations to completion", async ()
   expect(text).toContain("CITATIONS_VALIDATED");
   expect(text).toContain("AGENT_COMPLETED");
   expect(text).toContain("storage.md");
-  expect(text).toContain('"report":"Use PostgreSQL [RAG:1]"');
+  expect(text).toContain('"report":"Use PostgreSQL [RAG:1] and [RAG:1]"');
   const retrieval = text
     .split("\n")
     .filter((line) => line.startsWith("data: "))
@@ -285,4 +285,15 @@ it("validates embedding configuration independently from generation", () => {
       OLLAMA_MODEL: "generation",
     }).key,
   ).toContain("embed-only");
+});
+
+it("removes deleted documents and supports an explicitly empty corpus on reingestion", async () => {
+  await rm(join(root, "storage.md"));
+  expect(await rag.ingest(signal)).toMatchObject({ documents: 1, chunks: 1 });
+  expect(await rag.retrieve("PostgreSQL", signal)).toEqual([]);
+  expect((await rag.retrieve("MCP", signal))[0]?.documentId).toBe("tools.md");
+  await rm(join(root, "tools.md"));
+  expect(await rag.ingest(signal)).toMatchObject({ documents: 0, chunks: 0 });
+  expect(await rag.health()).toMatchObject({ compatible: true, chunks: 0 });
+  expect(await rag.retrieve("MCP", signal)).toEqual([]);
 });

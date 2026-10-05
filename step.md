@@ -104,13 +104,16 @@
 
 ## Milestone 5：基础 RAG
 
-实现状态：已实现，等待用户验证。运行与验证见 `docs/milestone5.md`。使用 PostgreSQL/pgvector 精确余弦检索、独立 embedding 配置、事务化全量摄取和可追溯片段引用；本轮设计与验证记录追加至 `interview.md`。M6 尚未开始。
+实现状态：实现及开发侧验收完成，等待用户确认。运行与验证见 `docs/milestone5.md`。使用 PostgreSQL/pgvector 精确余弦检索、独立 embedding 配置、事务化全量摄取和可追溯片段引用；本轮设计与验证记录追加至 `interview.md`。M6 尚未开始。
 
-1. 从一小组固定本地文档建立摄取流程：解析、去重、分块、来源与位置元数据。
-2. 接入选定的本地向量存储与 embedding provider；提供重新摄取、检索和健康检查。
-3. 将检索命中组织为有来源标识的上下文，让生成结果能引用具体片段；对无法支持的结论明确表示证据不足。
-4. 写确定性检索测试和引用映射测试，并用样例文档手工检查端到端结果。
-5. 说明分块、embedding、召回与引用的取舍；等待验证。
+环境补充：已安装 Docker CLI/Compose + Colima，启动真实 PostgreSQL/pgvector 并验证 TCP 检索、事务回滚、并发配置一致性及重启后数据保留。外部服务通过 `DATABASE_URL` 接入，支持证书校验与自定义 CA；详见 M5 文档。
+
+- [x] 1. 从一小组固定本地文档建立摄取流程：解析、去重、分块、来源与位置元数据。
+- [x] 2. 接入选定的本地向量存储与 embedding provider；提供重新摄取、检索和健康检查。
+- [x] 3. 将检索命中组织为有来源标识的上下文，让生成结果能引用具体片段；无命中时直接返回证据不足，有命中时通过提示词约束并校验引用映射（不保证语义正确）。
+- [x] 4. 完成确定性检索、引用映射、删除文档及空资料集重新摄取测试；通过真实 PostgreSQL/Ollama HTTP 链路及 Edge 页面验收，展开核对来源片段。
+- [x] 5. 在 `docs/milestone5.md` 和 `interview.md` 说明分块、embedding、召回与引用的取舍。
+- [ ] 用户确认 M5 后进入 M6。
 
 ## Milestone 6：Agentic RAG
 

@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 import type { Chunk, Hit } from "./chunks.js";
 
 export interface Sql {
@@ -11,9 +11,9 @@ export interface Database extends Sql {
   transaction<T>(work: (sql: Sql) => Promise<T>): Promise<T>;
 }
 
-export function postgresDatabase(url: string) {
+export function postgresDatabase(config: PoolConfig) {
   const pool = new Pool({
-    connectionString: url,
+    ...config,
     max: 4,
     connectionTimeoutMillis: 5000,
     statement_timeout: 10000,

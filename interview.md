@@ -221,3 +221,43 @@ embedding 使用任务 AbortSignal 和 deadline；数据库查询有连接/语�
 ### 核查来源
 
 核对了 [pgvector 官方 README](https://github.com/pgvector/pgvector) 的余弦运算及镜像标签（Compose 使用 0.8.7-pg17）、[PGlite 官方扩展说明](https://pglite.dev/extensions/) 与 [API 文档](https://pglite.dev/docs/api)、[Ollama embedding 官方说明](https://ollama.com/blog/embedding-models)，并检查已安装 SDK 类型。PGlite 与 pgvector 扩展仅作为 devDependencies，依赖锁定至确切版本。
+
+## 2026-10-05：补齐 Docker 验证与外部 PostgreSQL 接口
+
+用户明确授权自行安装 Docker 并执行相关操作，同时要求预留外部 PostgreSQL 接口。本轮完成这两项，不进入 M6。
+
+### 为什么使用 Colima？
+
+在 macOS 安装 Docker CLI 29.8.2、Compose 5.6.0 与 Colima 0.10.3，由 Colima 在轻量 Linux VM 内运行真正的 Docker Engine，适合当前命令行开发流程。按 [Colima 官方说明](https://github.com/abiosoft/colima) 使用 Homebrew 安装与启动，VM 分配 2 CPU、2 GiB 内存、20 GiB 磁盘上限，使用 macOS Virtualization.Framework。合并 Docker CLI 插件目录配置，保留原有配置项；当前 Docker context 为 colima，没有安装登录自启动服务。
+
+首次启动遇到 VM 的 `/etc/resolv.conf` 指向不存在的 systemd-resolved 文件，导致镜像拉取 DNS 失败。配置 DNS 为 1.1.1.1/8.8.8.8，并将 VM 的 resolv.conf 链接修复到持久文件 `/etc/resolv.conf.colima`，随后成功拉取官方镜像。此改动只在新建的 Colima VM 内，未修改宿主机 DNS。
+
+### 外部数据库边界如何保留？
+
+所有数据库访问仍由 pg 适配器实现，Compose 只负责本地服务，不进入业务逻辑。`DATABASE_URL` 可以替换为外部 PostgreSQL 连接串；新增独立配置解析器，限制 postgres/postgresql 协议，提供 `DATABASE_SSL_MODE=verify-full` 及可选 `DATABASE_SSL_CA_FILE`，启用证书和主机名验证，不提供关闭证书校验的 TLS 模式。`disable` 仅表示禁用 TLS，供本地数据库使用。
+
+核对 [node-postgres SSL 文档](https://node-postgres.com/features/ssl) 后，显式禁止 DATABASE_SSL_MODE 与连接串 ssl/sslmode/sslcert/sslkey/sslrootcert 参数混用，避免 URL 配置覆盖手工提供的 CA。未设置显式模式时仍支持服务商提供的连接串参数。外部服务需要 pgvector，管理员可预先安装扩展；摄取账号需具备 schema/表创建、读写和表锁权限。运行说明已补入 docs/milestone5.md，连接账号与证书不写入仓库。
+
+### 本轮验证与问题修复
+
+Compose 启动成功，实际版本 PostgreSQL 17.11 / pgvector 0.8.7。通过真实 pg TCP 连接摄取 3 份 ADR、4 个片段；`/api/rag/health` 返回 ready，检索接口返回来源片段。重启容器后仍有同一索引及 4 个片段，验证了命名数据卷持久性。
+
+新增可选真实数据库集成测试，使用 TEST_DATABASE_URL，在随机独立 schema 中创建并清理测试表，不替换业务 rag_* 数据。覆盖向量排序与阈值、事务失败回滚、并发读写时完整索引配置或明确不匹配错误，避免不同维度混用。普通测试未提供 TEST_DATABASE_URL 时跳过这两项。
+
+HTTP 端到端首次发现模型输出 `[ RAG:1 ]` 被严格引用检查误拒绝。修复为规范化中英文括号及引用编号外围空白，随后仍对真实来源编号做严格匹配；补充了回归测试。第二次真实 HTTP 请求完成 CITATIONS_VALIDATED 与 AGENT_COMPLETED（事件序号 351），日志 `/tmp/ai-research-m5-postgres.sse`。生成与 embedding 均使用本地 Ollama，存储使用真实容器 PostgreSQL；不是嵌入式测试数据库。
+
+API 42 个测试（含真实 PostgreSQL 2 个）和 Web 6 个测试通过；类型、lint、格式及构建通过。云端 PostgreSQL 的具体账号、网络和 TLS 握手尚未测试，因为尚未提供外部服务；当前已预留且验证配置边界。
+
+### 留给用户的运行状态
+
+保留 Colima 与数据库容器运行，保留命名数据卷；关闭本轮临时 3015 API。为已有 apps/api/.env 追加本地 RAG 配置，保留原生成模型配置；现在可直接 pnpm dev。停止数据库用 docker compose stop，恢复用 docker compose up -d --wait；停止 VM 用 colima stop，重启机器后 colima start。step.md 与 M5 文档同步更新，等待用户验证后进入下一里程碑。
+
+## 2026-10-05：Milestone 5 最终收尾验收
+
+用户要求继续完成 M5。本轮对照 step.md 检查后，核心功能和真实 PostgreSQL/HTTP 验证均已有，剩余收尾集中在真实浏览器验收，以及删除文档后重新摄取的明确回归覆盖。
+
+通过 Edge 独立验收标签访问运行中的 localhost:5173，提交 PostgreSQL/pgvector 选型问题。实际看到 running → completed、命中 1 个片段、引用映射校验成功，并展开 `0003-storage-and-protocol-boundaries.md` 第 1–17 行，核对 `[RAG:1]`、稳定片段 ID、SHA-256、相似度及原文。检查了报告及展开来源的页面截图，当前纯文本报告与来源可读；报告仍显示 Markdown 原文，完整富文本展示留待后续 UI 阶段。任务 ID 为 `181b91c1-21f2-45dd-b84c-3573d9fc84dc`。本轮使用现有开发服务，没有重启用户运行中的进程。
+
+新增回归测试在临时资料目录中删除文档并重新摄取，确认被删除来源不再检索到、剩余来源仍可检索；进一步删除全部文档后，索引片段数为零且检索返回空。空资料集视为有效快照，允许显式全量清空；其 health compatible=true 表示配置兼容，不表示一定存在可用证据，需同时检查 chunks。生产语料与数据库未被该测试改动。
+
+API 43 个测试通过（含 2 个真实 PostgreSQL 集成测试）；Web 沿用此前通过的 6 个测试，本轮未改前端代码。类型、lint、格式检查通过。step.md 的 M5 实施清单全部勾选，运行说明补充验收结果。开发侧 M5 已完成，等待用户确认后再进入 M6；没有把语义正确性、云数据库实连或后续 Agentic RAG 算作本轮已完成内容。

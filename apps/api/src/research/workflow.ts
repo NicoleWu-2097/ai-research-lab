@@ -87,8 +87,11 @@ export async function runResearch(
           "The model returned no report.",
         );
       if (tools?.evidenceOnly) {
-        // Models may use Chinese citation brackets for Chinese questions.
-        report = report.replace(/【(RAG:[^】]+)】/g, "[$1]");
+        // Normalize presentation only; the referenced ID must still match exactly.
+        report = report.replace(
+          /(?:\[|【)\s*(RAG:[^\]】]+?)(?:\]|】)/g,
+          (_match, id: string) => `[${id.trim()}]`,
+        );
         const cited = [...report.matchAll(/\[(RAG:[^\]]+)\]/g)].map(
           (match) => match[1]!,
         );
