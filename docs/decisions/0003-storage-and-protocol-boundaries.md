@@ -4,7 +4,7 @@
 
 ## 决定
 
-M5 以 PostgreSQL + [pgvector](https://github.com/pgvector/pgvector) 存任务、来源、事件和向量，使用 PostgreSQL 全文检索作为混合检索的起点。M4 用官方 [MCP TypeScript SDK v2](https://github.com/modelcontextprotocol/typescript-sdk) 接真实工具；M8 才用官方 [A2A JS SDK](https://github.com/a2aproject/a2a-js) 将至少两个有独立服务意义的 Agent 连接起来。
+M5 以 PostgreSQL + [pgvector](https://github.com/pgvector/pgvector) 存来源片段和向量，先做精确余弦检索；任务和事件持久化留到 M9。PostgreSQL 全文检索作为后续混合检索候选，按召回评估决定是否引入。M4 用官方 [MCP TypeScript SDK v2](https://github.com/modelcontextprotocol/typescript-sdk) 接真实工具；M8 才用官方 [A2A JS SDK](https://github.com/a2aproject/a2a-js) 将至少两个有独立服务意义的 Agent 连接起来。
 
 ## 理由与取舍
 

@@ -5,6 +5,8 @@ import { z } from "zod";
 import { createDeadline } from "../model/deadline.js";
 import { toModelError, type ModelProvider } from "../model/types.js";
 import { runResearch } from "./workflow.js";
+import { McpToolError, type ResearchTools } from "../mcp/client.js";
+import { RagError } from "../rag/service.js";
 
 const requestSchema = z.object({
   question: z.string().trim().min(1).max(8000),
@@ -13,6 +15,7 @@ const requestSchema = z.object({
 export function researchRoutes(
   provider: ModelProvider | null,
   timeoutMs: number,
+  tools: ResearchTools | null = null,
 ) {
   const routes = new Hono();
   routes.post("/stream", async (context) => {
@@ -71,11 +74,17 @@ export function researchRoutes(
           provider,
           deadline.signal,
           (text) => emit("REPORT_DELTA", { text }),
+          tools,
+          emit,
         );
         deadline.signal.throwIfAborted();
         await emit("AGENT_COMPLETED", { status: "completed", report });
       } catch (error) {
-        const failure = toModelError(error, deadline.signal);
+        const failure =
+          !deadline.signal.aborted &&
+          (error instanceof McpToolError || error instanceof RagError)
+            ? error
+            : toModelError(error, deadline.signal);
         const cancelled = failure.code === "MODEL_CANCELLED";
         console.info(
           JSON.stringify({

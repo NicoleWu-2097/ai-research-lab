@@ -2,6 +2,9 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { researchRoutes } from "./research/routes.js";
+import type { ResearchTools } from "./mcp/client.js";
+import type { RagService } from "./rag/service.js";
+import { ragRoutes } from "./rag/routes.js";
 
 import { createDeadline, raceWithAbort } from "./model/deadline.js";
 import { requireModelProvider } from "./model/config.js";
@@ -25,9 +28,15 @@ function errorStatus(error: ModelError): 503 | 504 | 408 | 422 | 502 {
   }
 }
 
-export function createApp(provider: ModelProvider | null, timeoutMs = 60_000) {
+export function createApp(
+  provider: ModelProvider | null,
+  timeoutMs = 60_000,
+  tools: ResearchTools | null = null,
+  rag: RagService | null = null,
+) {
   const app = new Hono();
-  app.route("/api/research", researchRoutes(provider, timeoutMs));
+  app.route("/api/research", researchRoutes(provider, timeoutMs, rag ?? tools));
+  app.route("/api/rag", ragRoutes(rag, timeoutMs));
 
   app.get("/api/health", (context) =>
     context.json({ status: "ok", service: "api" } as const),

@@ -5,6 +5,16 @@ export interface ResearchEvent {
   text?: string;
   report?: string;
   message?: string;
+  sources?: {
+    id: string;
+    chunkId: string;
+    documentId: string;
+    content: string;
+    sha256: string;
+    startLine: number;
+    endLine: number;
+    score: number;
+  }[];
 }
 
 export async function readResearchStream(
@@ -48,6 +58,24 @@ export async function readResearchStream(
             throw new Error("Invalid research event payload.");
         }
         const parsed = event as ResearchEvent;
+        if (
+          parsed.type === "RETRIEVAL_COMPLETED" &&
+          (!Array.isArray(record.sources) ||
+            !record.sources.every((source: unknown) => {
+              if (!source || typeof source !== "object") return false;
+              const s = source as Record<string, unknown>;
+              return (
+                ["id", "chunkId", "documentId", "content", "sha256"].every(
+                  (key) => typeof s[key] === "string",
+                ) &&
+                ["startLine", "endLine", "score"].every(
+                  (key) =>
+                    typeof s[key] === "number" && Number.isFinite(s[key]),
+                )
+              );
+            }))
+        )
+          throw new Error("Invalid retrieval sources.");
         onEvent(parsed);
         terminal ||= [
           "AGENT_COMPLETED",

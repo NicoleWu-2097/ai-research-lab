@@ -4,7 +4,10 @@ export function raceWithAbort<T>(
   operation: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason);
+  if (signal.aborted) {
+    void operation.catch(() => undefined);
+    return Promise.reject(signal.reason);
+  }
 
   return new Promise<T>((resolve, reject) => {
     const abort = () => reject(signal.reason);

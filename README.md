@@ -1,6 +1,6 @@
 # AI Research Lab
 
-Milestone 3 adds a single Research Agent and a streaming research form. Configure a model below, start the apps, and submit a question in the browser. See [Milestone 3](docs/milestone3.md) for the workflow, event contract and current limits, and [the architecture](docs/architecture.md) for the planned system.
+Milestone 5 adds local document ingestion, pgvector retrieval and traceable chunk citations. See [Milestone 5](docs/milestone5.md) for database and embedding setup, [Milestone 4](docs/milestone4.md) for MCP tools, and [the architecture](docs/architecture.md) for the planned system.
 
 ## Run locally
 

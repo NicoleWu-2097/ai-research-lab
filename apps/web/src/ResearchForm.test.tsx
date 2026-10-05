@@ -11,6 +11,23 @@ afterEach(() => {
 it("submits a question and displays its completed report", async () => {
   const events = [
     { type: "AGENT_STARTED" },
+    { type: "TOOLS_DISCOVERED", message: "MCP 已发现资料工具" },
+    { type: "TOOL_RESULT", message: "读取成功：storage.md" },
+    {
+      type: "RETRIEVAL_COMPLETED",
+      sources: [
+        {
+          id: "RAG:test",
+          chunkId: "RAG:stable-hash",
+          documentId: "storage.md",
+          content: "原始证据片段",
+          sha256: "a".repeat(64),
+          startLine: 2,
+          endLine: 4,
+          score: 0.8,
+        },
+      ],
+    },
     { type: "REPORT_DELTA", text: "Analysis" },
     { type: "AGENT_COMPLETED", report: "Analysis" },
   ];
@@ -37,6 +54,9 @@ it("submits a question and displays its completed report", async () => {
   expect(await screen.findByText("研究状态：completed")).toBeTruthy();
   expect(screen.getByText("Analysis")).toBeTruthy();
   expect(screen.getByText("任务 ID：test-task")).toBeTruthy();
+  expect(screen.getByText("读取成功：storage.md")).toBeTruthy();
+  expect(screen.getByText("原始证据片段")).toBeTruthy();
+  expect(screen.getByText("storage.md：第 2–4 行")).toBeTruthy();
 });
 
 it("cancels a pending request", async () => {

@@ -139,3 +139,85 @@ fake provider 测试覆盖 HTTP 响应、SSE、输入校验、未配置、超时
 可信度边界：提示词要求产出初步结论、理由、不确定性和下一步待查证据，并明确没有外部检索工具。页面同步说明这一限制。当前不能宣称报告引用已核验；真实来源追踪在 MCP/RAG 阶段实现。
 
 验证：25 个测试通过，覆盖后端图执行/状态顺序/失败/超时/取消，以及前端表单提交/取消、SSE 分块和不完整流；类型、lint、格式、构建、依赖 peer 检查及 frozen-lockfile 安装通过。真实 Ollama `gpt-oss:20b` 在测试端口 3013 经新研究接口返回 124 条任务事件，以 `AGENT_COMPLETED` 和完整初步报告结束，测试服务已关闭。尚未进行真实浏览器视觉检查，等待用户按文档验证页面后再开始 M4。
+
+## 2026-10-05：Milestone 4，真实 MCP 资料服务
+
+### 本轮需求与结果
+
+用户要求继续完成 M4。已接入官方 MCP TypeScript v2 SDK（client/server 均锁定 2.3.0），实现独立 stdio 子进程、工具发现、只读资料列表/读取、Agent 选择、来源上下文及页面工具活动。配置与手工验证见 [milestone4.md](docs/milestone4.md)，SDK 用法核对了[官方 v2 文档](https://ts.sdk.modelcontextprotocol.io/v2/)。
+
+### 为什么第一个工具是本地文档？
+
+研究项目架构时，已有 ADR 就是有用资料。本地资料能离线运行、固定输入并验证访问边界，也不需要搜索服务账户。默认目录为 `docs/decisions`，可通过 `MCP_DOCUMENT_ROOT` 改为准备好的 Markdown 资料目录。这里是按 ID 读取全文，尚未实施分块、向量索引、embedding 或 RAG。
+
+### 这是真实 MCP 吗？为什么自己写 server？
+
+宿主使用官方 Client，通过 SDK StdioClientTransport 启动独立 server；server 使用官方 McpServer 注册两个有 schema 的工具。初始化握手、工具发现和调用均由 SDK 执行，跨进程传输 JSON-RPC；自写部分只实现这个项目的资料访问规则。与直接函数调用相比，这使工具服务具有明确协议边界，也可以被其他兼容 MCP host 启动。
+
+### MCP 与模型 tool calling 的区别
+
+MCP 描述 host 如何发现和执行工具，并不负责让 LLM 决定调用什么。本阶段先列出资料，再使用 M2 的 structuredOutput 从已列出的 ID 中选择一份或 `none`；宿主再次校验选择后调用 `read_document`。这是有界的结构化选择流程，尚未接入 provider 原生 function calling 或 ReAct 循环。最多两次工具调用使成本、权限和测试范围明确；自主检索循环留给后续阶段。
+
+### 权限由谁执行？
+
+host 只允许 `list_documents` 和 `read_document`。server 限定根目录、文件名格式和 `.md` 扩展名，不递归；读取最多 24,000 字节，使用 O_NOFOLLOW 拒绝符号链接，并验证普通文件。工具的 readOnlyHint 等 annotation 只描述意图，实际安全边界由代码实施。模型不控制子进程命令、环境或目录，API 密钥不传递给子进程；尚未提供 OS 级沙箱，因此只运行受信任的本地 server 代码。
+
+### 如何处理取消、错误和来源？
+
+每个任务独立创建会话，协议请求上限 10 秒，总截止时间仍为 MODEL_TIMEOUT_MS，最终在 finally 关闭 client 与 transport。工具错误发 TOOL_FAILED 并终止任务，返回脱敏 MCP_TOOL_FAILED；模型选择阶段的已知模型错误保留原有类型。源文档包含 ID、SHA-256、读取时间，报告按 ID 引用，页面显示发现/调用/结果/来源事件。来源作为不可信数据进入提示词，提示词隔离不保证防住所有注入，文档存在也不等于结论正确。
+
+### 验证与下一步
+
+30 个测试及类型、lint、格式、构建、peer 检查和 frozen-lockfile 安装通过。新增测试使用真实 stdio 子进程，覆盖发现/读取、目录穿越、符号链接、大文件、Agent 选择与跳过、目录失败和取消，并验证前端显示工具活动。
+
+编译后 API 在端口 3014 使用真实 Ollama `gpt-oss:20b`，成功选择并读取 `0003-storage-and-protocol-boundaries.md`，最终以该 ID 引用资料并发出 AGENT_COMPLETED（序号 116）。临时服务已关闭；本轮没有使用真实 OpenAI API，也没有浏览器视觉验证。停在 M4，待用户验证后再进入 M5。
+
+## 2026-10-05：Milestone 5，基础 RAG 与引用追溯
+
+### 本轮需求与结果
+
+用户要求开始 M5，随后要求继续完成。已实现 Markdown 摄取、内容去重、重叠分块、PostgreSQL/pgvector 存储、独立 embedding 配置、检索与健康接口、研究工作流引用校验和页面原文展示。提供 Compose、重新摄取命令及简洁的 `docs/milestone5.md`；在 step.md 标记等待用户验证，未进入 M6。沿用每轮对话追加本文件的规则。
+
+### 为什么 generation 与 embedding 分开配置？
+
+生成模型不一定能输出适合检索的向量，两个阶段的模型、维度与服务地址需要独立选择。embedding 使用官方 Ollama/OpenAI SDK，显式配置 provider、model、dimensions，验证向量数量、维度、有限数值和非零向量；Ollama 禁止静默截断。维度设置是对原生输出的校验，不做自动降维。OpenAI 的返回按输入 index 排序。默认不启用 RAG，避免升级后强制依赖数据库；开启后固定走一次本地检索，MCP 全文选择仍可在 RAG 关闭时使用。
+
+索引配置指纹包括 embedding provider、endpoint、model、dimensions、分块版本和资料目录。改变这些配置必须重新摄取，防止不同向量空间或资料集静默混用。同名模型 tag 更新权重不在指纹检测范围，操作者仍须重新摄取。
+
+### 如何分块、去重和定位？
+
+复用 M4 的受限文件读取器：单层可信目录、最多 30 个合法 ASCII 文件名的 Markdown、每份不超过 24 KB、不跟随符号链接。Markdown 原样解码为文本，保留格式，不引入 PDF/HTML 解析器。原始文件 SHA-256 去重，同内容选文件名排序首个来源，不维护别名列表。
+
+分块最多 900 个 UTF-16 单位、相邻重叠 120，边界避开代理对。保存 `[start,end)` 字符范围、起止行、原文 SHA-256、摄取与检索时间；稳定片段 ID 由文件名、文档哈希、字符范围生成。优点是简单且能精确映射回快照；代价是可能切断标题或句子，也不等同 token 预算。中文、段落分块与 tokenizer 的收益后续靠评估决定。
+
+### 为什么全量事务替换、精确检索？
+
+当前语料很小，全量重建便于正确处理修改和删除，不需要增量任务状态机。先完成所有文件读取和 embedding，之后在一个数据库事务中替换索引；读写锁协调查询与替换，失败回滚保留旧索引。向量和元数据参数化写入，索引记录存配置指纹。单资料集设计，多个不同资料集并行摄取会竞争同一快照，因此不支持多租户或并行资料集管理。
+
+检索使用 pgvector 的精确余弦距离，按距离和稳定 ID 排序，最多 4 段，默认相似度阈值 0.4。这只是教学起点，不是经过评测的最佳参数，也不是概率。小语料不引入 HNSW、全文混合检索或 reranker。更正 ADR 0003 中过宽的 M5 描述：M5 实际只持久化来源片段和向量，任务/事件持久化留给 M9，全文检索属于后续候选。
+
+### 引用编号为什么与片段 ID 分离？
+
+首次真实模型测试中，要求模型复写 64 位哈希的引用未通过校验。改用每次请求局部的 `[RAG:1]` 等编号，检索事件保留 `id → chunkId → documentId / sha256 / 位置 / 原文片段` 的映射。模型提示词只提供编号与片段内容，降低复制负担；完整元数据用于 UI 和审计。
+
+另一次真实生成使用了中文括号 `【RAG:1】`，属于格式差异。现在最终报告先规范化这种括号，再检查引用集合，未知编号和没有引用仍报 MODEL_INVALID_OUTPUT；不会把失败草稿标记为完成。前端可展开原文并显示稳定片段 ID。短编号仅在单次任务内有意义，不能脱离映射跨报告复用。
+
+### 证据不足、可信度与取消边界
+
+零命中时直接返回本地证据不足，不调用生成模型。命中后提示模型仅依据片段、区分规划与已实施能力、不编造性能结论；引用校验只验证标识对应，不验证语义蕴含。真实试跑也曾出现资料外推断，因此没有宣称能保证每个结论正确；语义评估、Critic 和更强约束属于后续里程碑。片段作为不可信数据，提示词隔离不是完善的注入防护。
+
+embedding 使用任务 AbortSignal 和 deadline；数据库查询有连接/语句超时。请求取消会停止等待，但不等于所有已发出的 SQL 都被即时撤销；摄取在提交前检查取消并回滚，提交后的取消不能撤回已完成事务。补修了 raceWithAbort 在传入已取消 signal 时对已有 Promise 的拒绝处理，避免未处理拒绝。
+
+健康接口检查数据库和索引指纹，不通过远程 embedding 调用来证明模型在线。检索失败返回脱敏 RAG_FAILED，数据库空闲连接错误也有独立事件，避免泄漏连接凭据。
+
+### 验证结果与环境限制
+
+44 个测试通过（API 38、Web 6），类型、lint、格式和构建通过。新增真实 pgvector SQL 测试覆盖排序、阈值、原文位置、Unicode 分块、稳定 ID、重复摄取、内容更新、失败回滚、模型/资料目录配置不匹配、取消与超时、无命中、引用映射及伪造引用。SDK 适配测试覆盖 OpenAI 输入顺序恢复、Ollama 参数、坏向量和取消；UI 测试验证来源片段可见。
+
+机器没有 Docker/PostgreSQL 命令，本轮用 PGlite 的 PostgreSQL WASM + pgvector 扩展执行同一 SQL；生产仍通过 pg 连接外部 PostgreSQL，不把 PGlite 当默认运行存储。已提供外部数据库 Compose，但未运行其镜像、TCP 连接或多连接并发锁测试。
+
+获得下载授权后安装本地 `embeddinggemma`（约 621 MB），以 768 维 embedding 配合已有 `gpt-oss:20b` 完成真实冒烟验证：摄取 3 份 ADR、生成 4 个片段、检索命中包含存储决策原文的片段，最终 CITATIONS_VALIDATED 后 AGENT_COMPLETED（序号 590）。日志位于 `/tmp/ai-research-m5-smoke.log`。测试数据库为临时内存实例，已关闭；没有改写用户 .env。未调用真实 OpenAI，也未做浏览器视觉检查。后续按 milestone5.md 验证外部数据库与页面后再进入 M6。
+
+### 核查来源
+
+核对了 [pgvector 官方 README](https://github.com/pgvector/pgvector) 的余弦运算及镜像标签（Compose 使用 0.8.7-pg17）、[PGlite 官方扩展说明](https://pglite.dev/extensions/) 与 [API 文档](https://pglite.dev/docs/api)、[Ollama embedding 官方说明](https://ollama.com/blog/embedding-models)，并检查已安装 SDK 类型。PGlite 与 pgvector 扩展仅作为 devDependencies，依赖锁定至确切版本。
