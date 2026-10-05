@@ -1,0 +1,53 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #1f2937;
+  background: #f8fafc;
+}
+
+body {
+  margin: 0;
+}
+
+textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0.5rem 0;
+  padding: 0.75rem;
+  font: inherit;
+}
+button {
+  padding: 0.6rem 1rem;
+  margin-right: 0.5rem;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.6;
+}
+[role="alert"] {
+  color: #b91c1c;
+}
+
+main {
+  max-width: 42rem;
+  margin: 15vh auto;
+  padding: 2rem;
+}
+
+h1 {
+  margin-bottom: 0.5rem;
+}
+
+[data-state="online"] {
+  color: #166534;
+}
+
+[data-state="offline"] {
+  color: #b91c1c;
+}
