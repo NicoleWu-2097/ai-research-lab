@@ -4,9 +4,17 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { createDeadline } from "../model/deadline.js";
 import { toModelError, type ModelProvider } from "../model/types.js";
+import { runResearchLoop } from "./loop.js";
 import { runResearch } from "./workflow.js";
 import { McpToolError, type ResearchTools } from "../mcp/client.js";
-import { RagError } from "../rag/service.js";
+import { RagError, type RagService } from "../rag/service.js";
+import { runAgenticResearch } from "./agentic.js";
+
+import {
+  createRemoteAgents,
+  AgentTransportError,
+  type AgentEndpoints,
+} from "../a2a/client.js";
 
 const requestSchema = z.object({
   question: z.string().trim().min(1).max(8000),
@@ -16,6 +24,11 @@ export function researchRoutes(
   provider: ModelProvider | null,
   timeoutMs: number,
   tools: ResearchTools | null = null,
+  rag: RagService | null = null,
+  agentic = false,
+  multiAgent = false,
+  endpoints: AgentEndpoints | null = null,
+  loop = false,
 ) {
   const routes = new Hono();
   routes.post("/stream", async (context) => {
@@ -69,20 +82,45 @@ export function researchRoutes(
       try {
         await emit("TASK_CREATED", { status: "queued" });
         await emit("AGENT_STARTED", { status: "running", agent: "research" });
-        const report = await runResearch(
-          request.data.question,
-          provider,
-          deadline.signal,
-          (text) => emit("REPORT_DELTA", { text }),
-          tools,
-          emit,
-        );
+        const report = loop
+          ? await runResearchLoop(
+              request.data.question,
+              provider,
+              deadline.signal,
+              (text) => emit("REPORT_DELTA", { text }),
+              rag,
+              tools,
+              emit,
+              endpoints ? createRemoteAgents(endpoints, emit) : null,
+            )
+          : agentic
+            ? await runAgenticResearch(
+                request.data.question,
+                provider,
+                deadline.signal,
+                (text) => emit("REPORT_DELTA", { text }),
+                rag,
+                tools,
+                emit,
+                multiAgent,
+                endpoints ? createRemoteAgents(endpoints, emit) : null,
+              )
+            : await runResearch(
+                request.data.question,
+                provider,
+                deadline.signal,
+                (text) => emit("REPORT_DELTA", { text }),
+                rag ?? tools,
+                emit,
+              );
         deadline.signal.throwIfAborted();
         await emit("AGENT_COMPLETED", { status: "completed", report });
       } catch (error) {
         const failure =
           !deadline.signal.aborted &&
-          (error instanceof McpToolError || error instanceof RagError)
+          (error instanceof McpToolError ||
+            error instanceof RagError ||
+            error instanceof AgentTransportError)
             ? error
             : toModelError(error, deadline.signal);
         const cancelled = failure.code === "MODEL_CANCELLED";

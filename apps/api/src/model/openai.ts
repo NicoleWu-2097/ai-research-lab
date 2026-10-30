@@ -2,7 +2,12 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { z } from "zod";
 
-import { ModelError, toModelError, type ModelProvider } from "./types.js";
+import {
+  MAX_OUTPUT_TOKENS,
+  ModelError,
+  toModelError,
+  type ModelProvider,
+} from "./types.js";
 
 export class OpenAIProvider implements ModelProvider {
   readonly provider = "openai" as const;
@@ -23,9 +28,18 @@ export class OpenAIProvider implements ModelProvider {
   async generate(prompt: string, signal: AbortSignal): Promise<string> {
     try {
       const response = await this.client.responses.create(
-        { model: this.model, input: prompt },
+        {
+          model: this.model,
+          input: prompt,
+          max_output_tokens: MAX_OUTPUT_TOKENS,
+        },
         { signal },
       );
+      if (response.status === "incomplete")
+        throw new ModelError(
+          "MODEL_INVALID_OUTPUT",
+          "Model output was incomplete.",
+        );
       if (!response.output_text) {
         throw new ModelError(
           "MODEL_INVALID_OUTPUT",
@@ -41,7 +55,12 @@ export class OpenAIProvider implements ModelProvider {
   async *stream(prompt: string, signal: AbortSignal): AsyncIterable<string> {
     try {
       const events = await this.client.responses.create(
-        { model: this.model, input: prompt, stream: true },
+        {
+          model: this.model,
+          input: prompt,
+          stream: true,
+          max_output_tokens: MAX_OUTPUT_TOKENS,
+        },
         { signal },
       );
       let completed = false;
@@ -76,10 +95,16 @@ export class OpenAIProvider implements ModelProvider {
         {
           model: this.model,
           input: prompt,
+          max_output_tokens: MAX_OUTPUT_TOKENS,
           text: { format: zodTextFormat(schema, "structured_result") },
         },
         { signal },
       );
+      if (response.status === "incomplete")
+        throw new ModelError(
+          "MODEL_INVALID_OUTPUT",
+          "Model output was incomplete.",
+        );
       if (response.output_parsed == null) {
         throw new ModelError(
           "MODEL_INVALID_OUTPUT",

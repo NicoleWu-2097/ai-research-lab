@@ -1,3 +1,5 @@
+export const MAX_OUTPUT_TOKENS = 4096;
+
 import type { z } from "zod";
 
 export type ProviderName = "openai" | "ollama";

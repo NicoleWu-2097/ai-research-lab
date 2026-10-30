@@ -13,7 +13,7 @@ export interface ResearchEvent {
     sha256: string;
     startLine: number;
     endLine: number;
-    score: number;
+    score: number | null;
   }[];
 }
 
@@ -68,7 +68,9 @@ export async function readResearchStream(
                 ["id", "chunkId", "documentId", "content", "sha256"].every(
                   (key) => typeof s[key] === "string",
                 ) &&
-                ["startLine", "endLine", "score"].every(
+                (s.score === null ||
+                  (typeof s.score === "number" && Number.isFinite(s.score))) &&
+                ["startLine", "endLine"].every(
                   (key) =>
                     typeof s[key] === "number" && Number.isFinite(s[key]),
                 )

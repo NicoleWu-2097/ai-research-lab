@@ -1,3 +1,4 @@
+import { readAgentEndpoints } from "./a2a/client.js";
 import { serve } from "@hono/node-server";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -16,6 +17,9 @@ const config = z
     PORT: z.coerce.number().int().min(1).max(65535).default(3001),
     MCP_ENABLED: z.enum(["true", "false"]).default("true"),
     RAG_ENABLED: z.enum(["true", "false"]).default("false"),
+    AGENTIC_RAG_ENABLED: z.enum(["true", "false"]).default("true"),
+    RESEARCH_LOOP_ENABLED: z.enum(["true", "false"]).default("true"),
+    MULTI_AGENT_ENABLED: z.enum(["true", "false"]).default("true"),
     MCP_DOCUMENT_ROOT: z.string().trim().min(1).optional(),
   })
   .parse(process.env);
@@ -28,7 +32,19 @@ const documentRoot = config.MCP_DOCUMENT_ROOT
 const tools =
   config.MCP_ENABLED === "true" ? new McpDocumentTools(documentRoot) : null;
 const rag = config.RAG_ENABLED === "true" ? createRag(process.env) : null;
-const app = createApp(provider, modelConfig?.timeoutMs, tools, rag?.service);
+const endpoints = readAgentEndpoints(process.env);
+const app = createApp(
+  provider,
+  modelConfig?.timeoutMs,
+  tools,
+  rag?.service,
+  config.AGENTIC_RAG_ENABLED === "true",
+  config.MULTI_AGENT_ENABLED === "true",
+  endpoints,
+  config.RESEARCH_LOOP_ENABLED === "true" &&
+    config.AGENTIC_RAG_ENABLED === "true" &&
+    config.MULTI_AGENT_ENABLED === "true",
+);
 
 const server = serve({ fetch: app.fetch, port: config.PORT });
 console.info(
@@ -40,6 +56,16 @@ console.info(
     model: provider?.model ?? null,
     mcpEnabled: tools !== null,
     ragEnabled: rag !== null,
+    multiAgentEnabled:
+      config.AGENTIC_RAG_ENABLED === "true" &&
+      config.MULTI_AGENT_ENABLED === "true",
+    endpoints,
+    researchLoopEnabled:
+      config.RESEARCH_LOOP_ENABLED === "true" &&
+      config.AGENTIC_RAG_ENABLED === "true" &&
+      config.MULTI_AGENT_ENABLED === "true",
+    a2aEnabled: endpoints !== null,
+    agenticEnabled: config.AGENTIC_RAG_ENABLED === "true",
   }),
 );
 

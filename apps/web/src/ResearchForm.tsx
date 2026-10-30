@@ -44,9 +44,20 @@ export function ResearchForm() {
         setTaskId(event.taskId);
         if (
           event.type.startsWith("TOOL") ||
+          event.type.startsWith("A2A_") ||
+          event.type.startsWith("LOOP_") ||
           event.type === "SOURCES_COLLECTED" ||
           event.type.startsWith("RETRIEVAL_") ||
-          event.type === "CITATIONS_VALIDATED"
+          event.type === "CITATIONS_VALIDATED" ||
+          [
+            "AGENT_DECISION",
+            "EVIDENCE_ASSESSED",
+            "RESEARCH_STOPPED",
+            "ROLE_DELEGATED",
+            "DRAFT_READY",
+            "CRITIC_REVIEWED",
+            "COORDINATOR_COMPLETED",
+          ].includes(event.type)
         ) {
           setToolEvents((items) => [...items, event.message ?? event.type]);
         }
@@ -104,7 +115,7 @@ export function ResearchForm() {
       {error && <p role="alert">{error}</p>}
       {toolEvents.length > 0 && (
         <details open>
-          <summary>工具活动</summary>
+          <summary>研究过程</summary>
           <ol>
             {toolEvents.map((item, index) => (
               <li key={index}>{item}</li>
@@ -115,22 +126,43 @@ export function ResearchForm() {
       {report && (
         <article aria-label="初步研究报告">
           {status !== "completed" && <p>以下内容为尚未完成校验的草稿。</p>}
-          <pre>{report}</pre>
+          <pre>
+            {report.split(/(\[RAG:[1-8]\])/g).map((part, index) => {
+              const source = sources.find((s) => `[${s.id}]` === part);
+              return source ? (
+                <a
+                  key={index}
+                  href={`#source-${source.id}`}
+                  onClick={() =>
+                    document
+                      .getElementById(`source-${source.id}`)
+                      ?.setAttribute("open", "")
+                  }
+                >
+                  {part}
+                </a>
+              ) : (
+                part
+              );
+            })}
+          </pre>
         </article>
       )}
       {sources.length > 0 && (
         <section aria-label="检索来源">
           <h2>检索来源</h2>
           {sources.map((source) => (
-            <details key={source.id}>
+            <details key={source.id} id={`source-${source.id}`}>
               <summary>
                 {source.documentId}：第 {source.startLine}–{source.endLine} 行
               </summary>
               <p>引用：[{source.id}]</p>
               <p>片段 ID：{source.chunkId}</p>
               <small>
-                原文 SHA-256：{source.sha256} · 相似度：
-                {source.score.toFixed(3)}
+                原文 SHA-256：{source.sha256}
+                {source.score === null
+                  ? " · MCP 文档片段"
+                  : ` · 相似度：${source.score.toFixed(3)}`}
               </small>
               <pre>{source.content}</pre>
             </details>

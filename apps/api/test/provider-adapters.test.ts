@@ -30,9 +30,19 @@ describe("Ollama SDK adapter", () => {
       const request = JSON.parse(String(init?.body)) as {
         model: string;
         format?: unknown;
+        options: { num_predict: number };
+        messages: { role: string; content: string }[];
       };
       expect(request.model).toBe("local-test");
+      expect(request.options.num_predict).toBe(4096);
       const content = request.format ? '{"answer":"yes"}' : "hello";
+      if (request.format) {
+        expect(request.messages[0]?.role).toBe("system");
+        expect(request.messages[0]?.content).toContain("Never emit tool calls");
+        expect(request.messages.at(-1)?.content).toContain(
+          JSON.stringify(request.format),
+        );
+      }
       return new Response(
         JSON.stringify({
           model: "local-test",
@@ -88,8 +98,10 @@ describe("OpenAI SDK adapter", () => {
       const request = JSON.parse(String(init?.body)) as {
         model: string;
         text?: unknown;
+        max_output_tokens: number;
       };
       expect(request.model).toBe("hosted-test");
+      expect(request.max_output_tokens).toBe(4096);
       return new Response(
         JSON.stringify(
           openAIResponse(request.text ? '{"answer":"yes"}' : "hello"),
@@ -133,5 +145,40 @@ describe("OpenAI SDK adapter", () => {
     for await (const chunk of provider.stream("hello", signal))
       chunks.push(chunk);
     expect(chunks).toEqual(["hello", " world"]);
+  });
+});
+
+it("rejects Ollama output truncated by the token cap", async () => {
+  const provider = new OllamaProvider(
+    "local-test",
+    "http://localhost:11434",
+    async () =>
+      new Response(
+        JSON.stringify({
+          model: "local-test",
+          message: { role: "assistant", content: '{"answer":"partial"}' },
+          done: true,
+          done_reason: "length",
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      ),
+  );
+  await expect(provider.generate("test", signal)).rejects.toMatchObject({
+    code: "MODEL_INVALID_OUTPUT",
+  });
+  await expect(
+    provider.structuredOutput("test", z.object({ answer: z.string() }), signal),
+  ).rejects.toMatchObject({ code: "MODEL_INVALID_OUTPUT" });
+});
+it("rejects OpenAI incomplete responses instead of publishing partial text", async () => {
+  const provider = new OpenAIProvider("hosted-test", "test-key", async () =>
+    Response.json({
+      ...openAIResponse("partial"),
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+    }),
+  );
+  await expect(provider.generate("test", signal)).rejects.toMatchObject({
+    code: "MODEL_INVALID_OUTPUT",
   });
 });

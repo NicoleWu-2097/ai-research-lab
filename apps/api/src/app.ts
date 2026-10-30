@@ -1,3 +1,4 @@
+import type { AgentEndpoints } from "./a2a/client.js";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
@@ -33,9 +34,25 @@ export function createApp(
   timeoutMs = 60_000,
   tools: ResearchTools | null = null,
   rag: RagService | null = null,
+  agentic = false,
+  multiAgent = false,
+  endpoints: AgentEndpoints | null = null,
+  loop = false,
 ) {
   const app = new Hono();
-  app.route("/api/research", researchRoutes(provider, timeoutMs, rag ?? tools));
+  app.route(
+    "/api/research",
+    researchRoutes(
+      provider,
+      timeoutMs,
+      tools,
+      rag,
+      agentic,
+      multiAgent,
+      endpoints,
+      loop,
+    ),
+  );
   app.route("/api/rag", ragRoutes(rag, timeoutMs));
 
   app.get("/api/health", (context) =>

@@ -2,6 +2,8 @@
 
 固定流程：问题 → embedding → pgvector 检索 → 带引用的流式报告。启用 RAG 时取代 M4 的全文选择流程；未启用时仍可使用 MCP。自主路由留到 M6。
 
+当前版本默认使用 [M6 自主路由](milestone6.md)；设 `AGENTIC_RAG_ENABLED=false` 可验证本页描述的 M5 固定流程。
+
 ## 启动
 
 本机已安装 Docker CLI、Compose 和 Colima。重启机器后先运行 `colima start`；停止虚拟机用 `colima stop`。虚拟机配置为 2 CPU、2 GiB 内存、20 GiB 磁盘上限。
