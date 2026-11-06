@@ -1,3 +1,5 @@
+import type { HumanService } from "./human/service.js";
+import { humanRoutes } from "./human/routes.js";
 import type { AgentEndpoints } from "./a2a/client.js";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -38,8 +40,15 @@ export function createApp(
   multiAgent = false,
   endpoints: AgentEndpoints | null = null,
   loop = false,
+  human: HumanService | null = null,
 ) {
   const app = new Hono();
+  if (human) {
+    app.route("/api/research/tasks", humanRoutes(human));
+    app.use("/api/research/stream", async (c) =>
+      c.json({ error: "人工介入已启用，请使用持久化任务接口。" }, 409),
+    );
+  }
   app.route(
     "/api/research",
     researchRoutes(
@@ -56,7 +65,11 @@ export function createApp(
   app.route("/api/rag", ragRoutes(rag, timeoutMs));
 
   app.get("/api/health", (context) =>
-    context.json({ status: "ok", service: "api" } as const),
+    context.json({
+      status: "ok",
+      service: "api",
+      ...(human ? { humanEnabled: true } : {}),
+    } as const),
   );
 
   app.post("/api/model/generate", async (context) => {

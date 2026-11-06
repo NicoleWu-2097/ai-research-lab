@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import { HumanStore } from "./human/store.js";
+import { HumanService } from "./human/service.js";
+import { postgresDatabase } from "./rag/store.js";
+import { readDatabaseConfig } from "./rag/database-config.js";
 import { readAgentEndpoints } from "./a2a/client.js";
 import { serve } from "@hono/node-server";
 import { existsSync } from "node:fs";
@@ -14,6 +19,13 @@ if (existsSync(".env")) process.loadEnvFile(".env");
 
 const config = z
   .object({
+    HUMAN_ENABLED: z.enum(["true", "false"]).default("false"),
+    APPROVAL_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1000)
+      .max(604800000)
+      .default(86400000),
     PORT: z.coerce.number().int().min(1).max(65535).default(3001),
     MCP_ENABLED: z.enum(["true", "false"]).default("true"),
     RAG_ENABLED: z.enum(["true", "false"]).default("false"),
@@ -33,6 +45,54 @@ const tools =
   config.MCP_ENABLED === "true" ? new McpDocumentTools(documentRoot) : null;
 const rag = config.RAG_ENABLED === "true" ? createRag(process.env) : null;
 const endpoints = readAgentEndpoints(process.env);
+let human: HumanService | null = null;
+let humanDb: ReturnType<typeof postgresDatabase> | null = null;
+if (config.HUMAN_ENABLED === "true") {
+  if (
+    !provider ||
+    config.RESEARCH_LOOP_ENABLED !== "true" ||
+    config.MULTI_AGENT_ENABLED !== "true" ||
+    config.AGENTIC_RAG_ENABLED !== "true"
+  )
+    throw new Error("Human mode requires a model and the M9 research loop.");
+  humanDb = postgresDatabase(readDatabaseConfig(process.env));
+  const store = new HumanStore(humanDb.database, config.APPROVAL_TIMEOUT_MS);
+  await store.initialize();
+  const keys = [
+    "DATABASE_URL",
+    "RAG_DOCUMENT_ROOT",
+    "EMBEDDING_PROVIDER",
+    "EMBEDDING_MODEL",
+    "EMBEDDING_DIMENSIONS",
+    "EMBEDDING_BASE_URL",
+    "RAG_MIN_SCORE",
+    "OLLAMA_BASE_URL",
+  ];
+  const configKey = createHash("sha256")
+    .update(
+      JSON.stringify({
+        version: 1,
+        model: provider.model,
+        provider: provider.provider,
+        timeout: modelConfig?.timeoutMs,
+        root: documentRoot,
+        endpoints,
+        rag: !!rag,
+        tools: !!tools,
+        env: keys.map((k) => process.env[k]),
+      }),
+    )
+    .digest("hex");
+  human = new HumanService(
+    store,
+    provider,
+    modelConfig!.timeoutMs,
+    rag?.service ?? null,
+    tools,
+    endpoints,
+    configKey,
+  );
+}
 const app = createApp(
   provider,
   modelConfig?.timeoutMs,
@@ -44,9 +104,14 @@ const app = createApp(
   config.RESEARCH_LOOP_ENABLED === "true" &&
     config.AGENTIC_RAG_ENABLED === "true" &&
     config.MULTI_AGENT_ENABLED === "true",
+  human,
 );
 
-const server = serve({ fetch: app.fetch, port: config.PORT });
+const server = serve({
+  fetch: app.fetch,
+  port: config.PORT,
+  ...(human ? { hostname: "127.0.0.1" } : {}),
+});
 console.info(
   JSON.stringify({
     event: "SERVER_STARTED",
@@ -64,6 +129,7 @@ console.info(
       config.RESEARCH_LOOP_ENABLED === "true" &&
       config.AGENTIC_RAG_ENABLED === "true" &&
       config.MULTI_AGENT_ENABLED === "true",
+    humanEnabled: human !== null,
     a2aEnabled: endpoints !== null,
     agenticEnabled: config.AGENTIC_RAG_ENABLED === "true",
   }),
@@ -72,7 +138,9 @@ console.info(
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     server.close(() => {
-      void (rag?.close() ?? Promise.resolve()).finally(() => process.exit(0));
+      void Promise.all([rag?.close(), humanDb?.close()]).finally(() =>
+        process.exit(0),
+      );
     });
   });
 }

@@ -1,6 +1,6 @@
 # AI Research Lab
 
-Milestone 9 adds a bounded research loop with Critic-driven follow-up retrieval and quoted evidence. See [Milestone 9](docs/milestone9.md) for the workflow, [Milestone 8](docs/milestone8.md) for A2A setup, [Milestone 7](docs/milestone7.md) for review behavior, [Milestone 6](docs/milestone6.md) for retrieval, [Milestone 5](docs/milestone5.md) for database and embedding setup, and [the architecture](docs/architecture.md) for the planned system.
+Milestone 10 adds durable human approval and safe resume between research steps. See [Milestone 10](docs/milestone10.md) for setup, [Milestone 9](docs/milestone9.md) for the workflow, [Milestone 8](docs/milestone8.md) for A2A setup, [Milestone 7](docs/milestone7.md) for review behavior, [Milestone 6](docs/milestone6.md) for retrieval, [Milestone 5](docs/milestone5.md) for database and embedding setup, and [the architecture](docs/architecture.md) for the planned system.
 
 ## Run locally
 

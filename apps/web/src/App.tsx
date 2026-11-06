@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
+import { HumanResearch } from "./HumanResearch";
 import { ResearchForm } from "./ResearchForm";
 
 type HealthState = "checking" | "online" | "offline";
 
 export function App() {
   const [health, setHealth] = useState<HealthState>("checking");
+
+  const [human, setHuman] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -22,6 +25,11 @@ export function App() {
           "status" in body &&
           body.status === "ok";
         setHealth(isHealthy ? "online" : "offline");
+        setHuman(
+          isHealthy &&
+            "humanEnabled" in (body as object) &&
+            (body as { humanEnabled?: boolean }).humanEnabled === true,
+        );
       } catch {
         if (!controller.signal.aborted) setHealth("offline");
       }
@@ -44,7 +52,7 @@ export function App() {
       <p role="status" data-state={health}>
         {label}
       </p>
-      <ResearchForm />
+      {human ? <HumanResearch /> : <ResearchForm />}
     </main>
   );
 }
