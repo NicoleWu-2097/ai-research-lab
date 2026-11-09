@@ -1,3 +1,4 @@
+import { BraveSearch } from "./search/brave.js";
 import { createHash } from "node:crypto";
 import { HumanStore } from "./human/store.js";
 import { HumanService } from "./human/service.js";
@@ -45,6 +46,12 @@ const tools =
   config.MCP_ENABLED === "true" ? new McpDocumentTools(documentRoot) : null;
 const rag = config.RAG_ENABLED === "true" ? createRag(process.env) : null;
 const endpoints = readAgentEndpoints(process.env);
+const web =
+  process.env.WEB_SEARCH_ENABLED === "true"
+    ? new BraveSearch(z.string().min(1).parse(process.env.BRAVE_SEARCH_API_KEY))
+    : null;
+if (web && config.HUMAN_ENABLED !== "true")
+  throw new Error("Web search requires durable human mode");
 let human: HumanService | null = null;
 let humanDb: ReturnType<typeof postgresDatabase> | null = null;
 if (config.HUMAN_ENABLED === "true") {
@@ -72,6 +79,7 @@ if (config.HUMAN_ENABLED === "true") {
     .update(
       JSON.stringify({
         version: 1,
+        web: !!web,
         model: provider.model,
         provider: provider.provider,
         timeout: modelConfig?.timeoutMs,
@@ -91,6 +99,7 @@ if (config.HUMAN_ENABLED === "true") {
     tools,
     endpoints,
     configKey,
+    web,
   );
 }
 const app = createApp(

@@ -64,6 +64,7 @@ export function ResearchForm() {
         if (event.type === "RETRIEVAL_COMPLETED")
           setSources(event.sources ?? []);
         if (event.type === "AGENT_STARTED") setStatus("running");
+        if (event.type === "REPORT_PREVIEW") setReport(event.report ?? "");
         if (event.type === "REPORT_DELTA")
           setReport((value) => value + (event.text ?? ""));
         if (event.type === "AGENT_COMPLETED") {

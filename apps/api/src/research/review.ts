@@ -30,6 +30,7 @@ export interface ResearchAgents {
 export function createResearchAgents(
   provider: ModelProvider,
   emit: ToolEventSink,
+  allowUnverified = false,
 ): ResearchAgents {
   return {
     research: (input, signal) =>
@@ -46,6 +47,7 @@ export function createResearchAgents(
         },
         emit,
         input.revision,
+        allowUnverified,
       ),
     critique: (input, signal) =>
       provider.structuredOutput(

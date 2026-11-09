@@ -46,12 +46,22 @@ export function App() {
   }[health];
 
   return (
-    <main>
-      <h1>AI Research Lab</h1>
-      <p>Research Agent</p>
-      <p role="status" data-state={health}>
-        {label}
-      </p>
+    <main className="terminal-shell">
+      <header className="app-header">
+        <div className="wordmark">
+          <span aria-hidden="true">▣</span>
+          <h1>AI Research Lab</h1>
+          <span className="version">/ research workspace</span>
+        </div>
+        <p role="status" data-state={health}>
+          <span className="status-dot" />
+          {label}
+        </p>
+      </header>
+      <div className="workspace-path">
+        <span>~/ai-research-lab</span>
+        <span>{human ? "审批模式 · durable" : "即时研究 · stream"}</span>
+      </div>
       {human ? <HumanResearch /> : <ResearchForm />}
     </main>
   );

@@ -142,17 +142,15 @@ it("requires follow-up for unresolved questions even when Critic approves", asyn
     plan("stop"),
   ]);
   expect(await test.run()).toContain("缺少性能实测");
-  expect(test.deltas[0]).not.toContain("文档选择单库");
+  expect(test.deltas[0]).toContain("待核验报告");
 });
 it.each([
   ["RAG:9", "one data service"],
   ["RAG:1", "fabricated quote"],
 ])("rejects invalid evidence %s %s", async (id, quote) => {
   const test = fixture([plan(), analysis(id, quote)]);
-  await expect(test.run()).rejects.toMatchObject({
-    code: "MODEL_INVALID_OUTPUT",
-  });
-  expect(test.deltas).toEqual([]);
+  expect(await test.run()).toContain("待核验");
+  expect(test.deltas).toHaveLength(1);
 });
 it("stops repeated queries and supplemental research with no new evidence", async () => {
   const duplicate = fixture(
@@ -228,9 +226,7 @@ it("does not turn tool failures or inconsistent reviews into sufficient evidence
     [plan(), analysis()],
     [{ ...approve, issues: ["conflict"] }],
   );
-  await expect(invalid.run()).rejects.toMatchObject({
-    code: "MODEL_INVALID_OUTPUT",
-  });
+  expect(await invalid.run()).toContain("审查输出无效");
 });
 it("cancels stalled remote analysis and times out an HTTP plan", async () => {
   const test = fixture([plan()]);

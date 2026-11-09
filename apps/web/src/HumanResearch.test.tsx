@@ -97,3 +97,30 @@ it("shows expired approvals without an approve action", async () => {
   expect(await screen.findByText("任务状态：expired")).toBeTruthy();
   expect(screen.queryByText("批准并继续")).toBeNull();
 });
+it("renders replayed research messages in the conversation and keeps the approval inline", async () => {
+  localStorage.setItem("human-research", JSON.stringify(credential));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url) =>
+      String(url).includes("/events?")
+        ? new Response(
+            'id: 2\nevent: research\ndata: {"seq":2,"actor":"system","action":"LOOP_PLAN","created_at":"2026-11-06T08:00:00Z","detail":{"message":"计划检索公开资料"}}\n\n',
+            { headers: { "Content-Type": "text/event-stream" } },
+          )
+        : Response.json(task),
+    ),
+  );
+  render(<HumanResearch />);
+  expect(await screen.findByText("计划检索公开资料")).toBeTruthy();
+  expect(screen.getByLabelText("研究对话")).toBeTruthy();
+  expect(screen.getByLabelText("待审批请求")).toBeTruthy();
+  const output = screen.getByRole("log");
+  expect(
+    output.querySelector("button, input, textarea, summary, a"),
+  ).toBeNull();
+  expect(
+    screen
+      .getByLabelText("研究操作区")
+      .contains(screen.getByText("批准并继续")),
+  ).toBe(true);
+});

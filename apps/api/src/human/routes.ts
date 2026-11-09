@@ -1,3 +1,4 @@
+import { streamSSE } from "hono/streaming";
 import { Hono } from "hono";
 import { z } from "zod";
 import { HumanConflict } from "./store.js";
@@ -52,6 +53,29 @@ export function humanRoutes(service: HumanService) {
       .string()
       .regex(/^[a-f0-9]{64}$/)
       .parse(key),
+  });
+  routes.get("/:id/events", async (c) => {
+    const { id, key } = credentials(
+      c.req.param("id"),
+      c.req.header("x-research-key"),
+    );
+    const after = z.coerce
+      .number()
+      .int()
+      .min(0)
+      .parse(c.req.query("after") ?? c.req.header("last-event-id") ?? "0");
+    const task = await service.store.read(id, key);
+    return streamSSE(c, async (stream) => {
+      for (const event of task.audit) {
+        const row = event as { seq: string | number };
+        if (Number(row.seq) > after)
+          await stream.writeSSE({
+            id: String(row.seq),
+            event: "research",
+            data: JSON.stringify(event),
+          });
+      }
+    });
   });
   routes.get("/:id", async (c) => {
     const { id, key } = credentials(

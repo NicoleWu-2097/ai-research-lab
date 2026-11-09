@@ -302,3 +302,18 @@ it("keeps execution time across approvals instead of granting a fresh budget", a
   expect((await run(f.service(), task.id, key)).status).toBe("failed");
   expect(f.local.retrieve).not.toHaveBeenCalled();
 });
+it("preserves actionable citation failure diagnostics instead of only a generic failure", async () => {
+  const f = fixture();
+  const created = await store.create("question", "Alice", false, "config-v1");
+  let task = await run(f.service(), created.task.id, created.key);
+  await store.decide(task.id, created.key, task.approval!.id, "Alice", true);
+  f.provider.stream = async function* () {
+    yield "没有任何片段引用的草稿";
+  };
+  task = await run(f.service(), task.id, created.key);
+  expect(task.status).toBe("completed");
+  expect(
+    task.audit.some((event) => event.action === "CITATIONS_UNVERIFIED"),
+  ).toBe(true);
+  expect(task.report).toBeTruthy();
+});
