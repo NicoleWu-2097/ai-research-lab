@@ -297,3 +297,47 @@ it("removes deleted documents and supports an explicitly empty corpus on reinges
   expect(await rag.health()).toMatchObject({ compatible: true, chunks: 0 });
   expect(await rag.retrieve("MCP", signal)).toEqual([]);
 });
+it("uploads UTF-8 text through Hono, indexes it without deleting existing sources, and deduplicates repeat uploads", async () => {
+  const app = createApp(model, 10000, null, rag);
+  const send = () => {
+    const form = new FormData();
+    form.append(
+      "file",
+      new File(["PostgreSQL upload unique evidence."], "研究资料.txt"),
+    );
+    return app.request("http://localhost/api/rag/upload", {
+      method: "POST",
+      body: form,
+    });
+  };
+  const first = await send();
+  expect(first.status).toBe(201);
+  const body = await first.json();
+  expect(body.chunks).toBe(1);
+  const hits = await rag.retrieve("PostgreSQL", signal);
+  expect(hits.some((hit) => hit.documentId === body.id)).toBe(true);
+  const count = (await rag.health()).chunks;
+  expect((await send()).status).toBe(201);
+  expect((await rag.health()).chunks).toBe(count);
+});
+it("rejects unsupported upload formats and foreign origins before indexing", async () => {
+  const app = createApp(model, 10000, null, rag);
+  const form = new FormData();
+  form.append("file", new File(["binary"], "document.pdf"));
+  expect(
+    (
+      await app.request("http://localhost/api/rag/upload", {
+        method: "POST",
+        body: form,
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await app.request("http://localhost/api/rag/upload", {
+        method: "POST",
+        headers: { origin: "https://example.com" },
+      })
+    ).status,
+  ).toBe(403);
+});

@@ -1,7 +1,9 @@
+import { DocumentUpload } from "./DocumentUpload";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { readResearchStream, type ResearchEvent } from "./research-stream";
 
 export function ResearchForm() {
+  const [attachments, setAttachments] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
   const [status, setStatus] = useState("idle");
   const [taskId, setTaskId] = useState("");
@@ -30,7 +32,11 @@ export function ResearchForm() {
       const response = await fetch("/api/research/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({
+          question: attachments.length
+            ? `${question}\n请优先检索本地上传资料：${attachments.join("、")}`
+            : question,
+        }),
         signal: controller.signal,
       });
       if (!response.ok)
@@ -92,6 +98,15 @@ export function ResearchForm() {
         输入研究问题，获得初步分析。启用本地检索后，报告可引用文档片段；当前不搜索互联网，结论仍需核验。
       </p>
       <form onSubmit={(event) => void submit(event)}>
+        <DocumentUpload
+          disabled={busy}
+          onUploaded={(name) =>
+            setAttachments((items) => [...new Set([...items, name])])
+          }
+        />
+        {attachments.length > 0 && (
+          <small>已附资料：{attachments.join("、")}</small>
+        )}
         <label htmlFor="question">研究问题</label>
         <textarea
           id="question"

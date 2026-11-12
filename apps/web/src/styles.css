@@ -513,3 +513,16 @@ body:has(.terminal-workspace) {
   height: auto;
   min-height: 100dvh;
 }
+.upload-control {
+  border-top: 1px dashed var(--line);
+  padding: 6px 0;
+  font-size: 0.7rem;
+}
+.upload-control small {
+  display: block;
+}
+.upload-control input[type="file"] {
+  font-size: 0.7rem;
+  max-width: 100%;
+  padding: 3px;
+}

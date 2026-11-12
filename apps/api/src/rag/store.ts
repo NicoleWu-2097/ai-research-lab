@@ -78,6 +78,33 @@ export class VectorStore {
       signal.throwIfAborted();
     });
   }
+  async append(
+    key: string,
+    chunks: Chunk[],
+    vectors: number[][],
+    signal: AbortSignal,
+  ) {
+    await this.db.transaction(async (sql) => {
+      await sql.query("LOCK TABLE rag_index IN EXCLUSIVE MODE");
+      const { rows } = await sql.query<{ embedding_key: string }>(
+        "SELECT embedding_key FROM rag_index",
+      );
+      if (rows[0] && rows[0].embedding_key !== key)
+        throw new Error("Reingest before uploading");
+      if (!rows[0])
+        await sql.query("INSERT INTO rag_index (embedding_key) VALUES ($1)", [
+          key,
+        ]);
+      for (const [i, chunk] of chunks.entries()) {
+        signal.throwIfAborted();
+        await sql.query(
+          "INSERT INTO rag_chunks (id,metadata,embedding) VALUES ($1,$2::jsonb,$3::vector) ON CONFLICT (id) DO NOTHING",
+          [chunk.id, JSON.stringify(chunk), JSON.stringify(vectors[i])],
+        );
+      }
+      signal.throwIfAborted();
+    });
+  }
   async health(key: string) {
     const { rows } = await this.db.query<{
       compatible: boolean;

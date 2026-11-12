@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { listDocuments, readDocument } from "../mcp/documents.js";
 import type { ResearchTools, ToolEventSink } from "../mcp/client.js";
 import type { ModelProvider } from "../model/types.js";
@@ -58,6 +59,32 @@ export class RagService implements ResearchTools {
     await this.store.initialize();
     await this.store.replace(this.indexKey, chunks, vectors, signal);
     return { documents: seen.size, duplicates, chunks: chunks.length };
+  }
+
+  async upload(name: string, content: string, signal: AbortSignal) {
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    const id = `upload-${sha256}.md`;
+    const chunks = chunkDocument({
+      id,
+      content,
+      sha256,
+      retrievedAt: new Date().toISOString(),
+    }).map((chunk) => ({ ...chunk, filename: name }));
+    const vectors: number[][] = [];
+    for (let i = 0; i < chunks.length; i += 16) {
+      const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
+      vectors.push(
+        ...validateVectors(
+          await this.embedder.embed(texts, signal),
+          texts.length,
+          this.embedder.dimensions,
+        ),
+      );
+    }
+    signal.throwIfAborted();
+    await this.store.initialize();
+    await this.store.append(this.indexKey, chunks, vectors, signal);
+    return { id, name, chunks: chunks.length };
   }
 
   health() {

@@ -1,3 +1,4 @@
+import { DocumentUpload } from "./DocumentUpload";
 import { useEffect, useRef, useState } from "react";
 interface Task {
   id: string;
@@ -43,6 +44,7 @@ interface Task {
 }
 export function HumanResearch() {
   const outputRef = useRef<HTMLDivElement>(null);
+  const [attachments, setAttachments] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
   const [actor, setActor] = useState("本机用户");
   const [clarify, setClarify] = useState(false);
@@ -144,7 +146,13 @@ export function HumanResearch() {
                   approvalId: task?.approval?.id,
                   ...(action === "approve" ? { value } : {}),
                 }
-              : { actor, question, clarify },
+              : {
+                  actor,
+                  question: attachments.length
+                    ? `${question}\n请优先检索本地上传资料：${attachments.join("、")}`
+                    : question,
+                  clarify,
+                },
           ),
         },
       );
@@ -154,6 +162,7 @@ export function HumanResearch() {
         localStorage.setItem("human-research", JSON.stringify(body));
         setCredential(body);
         setTask(null);
+        setAttachments([]);
       }
       setTick((t) => t + 1);
     } catch (e) {
@@ -329,6 +338,15 @@ export function HumanResearch() {
                 void send();
               }}
             >
+              <DocumentUpload
+                disabled={busy}
+                onUploaded={(name) =>
+                  setAttachments((items) => [...new Set([...items, name])])
+                }
+              />
+              {attachments.length > 0 && (
+                <small>已附资料：{attachments.join("、")}</small>
+              )}
               <label>
                 研究问题
                 <textarea
