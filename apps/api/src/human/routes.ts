@@ -5,6 +5,21 @@ import { HumanConflict } from "./store.js";
 import type { HumanService } from "./service.js";
 const actor = z.string().trim().min(1).max(80);
 const question = z.string().trim().min(1).max(8000);
+const messageInput = z
+  .object({
+    message: question.optional(),
+    question: question.optional(),
+    actor,
+  })
+  .refine((body) => !!(body.message ?? body.question), "message is required")
+  .refine(
+    (body) => !body.message || !body.question || body.message === body.question,
+    "message and question conflict",
+  )
+  .transform((body) => ({
+    message: body.message ?? body.question!,
+    actor: body.actor,
+  }));
 export function humanRoutes(service: HumanService) {
   const routes = new Hono();
   routes.use("*", async (c, next) => {
@@ -35,17 +50,22 @@ export function humanRoutes(service: HumanService) {
     ),
   );
   routes.post("/", async (c) => {
-    const body = z
-      .object({ question, actor, clarify: z.boolean().default(false) })
-      .parse(await c.req.json());
+    const raw = await c.req.json();
+    const body = messageInput.parse(raw);
+    const { clarify } = z
+      .object({ clarify: z.boolean().default(false) })
+      .parse(raw);
     const result = await service.store.create(
-      body.question,
+      body.message,
       body.actor,
-      body.clarify,
+      clarify,
       service.configKey,
     );
-    if (!body.clarify) await service.start(result.task.id, result.key);
-    return c.json({ id: result.task.id, key: result.key }, 201);
+    if (!clarify) await service.start(result.task.id, result.key);
+    return c.json(
+      { id: result.task.id, key: result.key, title: result.task.title },
+      201,
+    );
   });
   const credentials = (id: string, key: string | undefined) => ({
     id: z.uuid().parse(id),
@@ -84,6 +104,13 @@ export function humanRoutes(service: HumanService) {
     );
     return c.json(await service.store.read(id, key));
   });
+  routes.delete("/:id", async (c) => {
+    const { id, key } = credentials(
+      c.req.param("id"),
+      c.req.header("x-research-key"),
+    );
+    return c.json(await service.store.delete(id, key));
+  });
   for (const action of ["approve", "reject"] as const)
     routes.post(`/:id/${action}`, async (c) => {
       const { id, key } = credentials(
@@ -104,6 +131,16 @@ export function humanRoutes(service: HumanService) {
       if (action === "approve") await service.start(id, key);
       return c.json({ ok: true });
     });
+  routes.post("/:id/followup", async (c) => {
+    const { id, key } = credentials(
+      c.req.param("id"),
+      c.req.header("x-research-key"),
+    );
+    const body = messageInput.parse(await c.req.json());
+    await service.store.followup(id, key, body.message, body.actor);
+    await service.start(id, key);
+    return c.json({ ok: true });
+  });
   routes.post("/:id/resume", async (c) => {
     const { id, key } = credentials(
       c.req.param("id"),

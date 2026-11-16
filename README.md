@@ -1,19 +1,19 @@
 # AI Research Lab
 
-Milestone 10 adds durable human approval and safe resume between research steps. See [Milestone 10](docs/milestone10.md) for setup, [Milestone 9](docs/milestone9.md) for the workflow, [Milestone 8](docs/milestone8.md) for A2A setup, [Milestone 7](docs/milestone7.md) for review behavior, [Milestone 6](docs/milestone6.md) for retrieval, [Milestone 5](docs/milestone5.md) for database and embedding setup, and [the architecture](docs/architecture.md) for the planned system.
+M11 now uses an Ink terminal client with streamed report previews, approval at the prompt, and persistent research projects. See [CLI usage](docs/cli.md), [gateway configuration](docs/hkust-api.md), and [workflow](docs/milestone9.md).
 
 ## Run locally
 
-Requires Node 24 and pnpm 11.22.0. From the repository root:
+Requires Node 24, pnpm 11.22.0, and PostgreSQL for project persistence. Configure `apps/api/.env` with `HUMAN_ENABLED=true`, database settings and your model API key.
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-Open <http://localhost:5173>. The page should say **API online**. The API health endpoint is <http://localhost:3001/api/health> and returns `{"status":"ok","service":"api"}`. Stop both processes with Ctrl+C.
+In another terminal run `pnpm cli`. Enter a question to create a project; after completion, enter another message to revise it. Use `/upload path/to/notes.md` to index a document. RAG also requires its embedding service.
 
-Ports can be changed with `PORT` for the API and `API_DEV_PROXY_TARGET` for the Vite proxy. Examples are in each app's `.env.example`; for the API, export `PORT` in the shell before `pnpm dev`.
+The API defaults to <http://localhost:3001>. The legacy browser client can be started separately with `pnpm dev:web`.
 
 ## Verify
 
@@ -25,7 +25,7 @@ pnpm test
 pnpm build
 ```
 
-`apps/api` owns HTTP behavior, model configuration and adapters. `apps/web` owns the status page and development proxy. No database is required yet.
+`apps/api` owns research and persistence; `apps/cli` is the main interface; `apps/web` retains the legacy browser client.
 
 ## Try a model
 

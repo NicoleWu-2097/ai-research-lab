@@ -327,7 +327,7 @@ it("runs the M9 analysis and Critic path through the two real role processes", a
           ? {
               action: "mcp",
               questions: ["设计是否落地？"],
-              query: "",
+              query: "设计是否落地",
               reason: "需要证据",
             }
           : {

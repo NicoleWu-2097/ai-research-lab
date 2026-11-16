@@ -10,6 +10,7 @@ export function ResearchForm() {
   const [report, setReport] = useState("");
   const [error, setError] = useState("");
   const [toolEvents, setToolEvents] = useState<string[]>([]);
+  const [artifacts, setArtifacts] = useState<string[]>([]);
   const [sources, setSources] = useState<NonNullable<ResearchEvent["sources"]>>(
     [],
   );
@@ -27,6 +28,7 @@ export function ResearchForm() {
     setReport("");
     setError("");
     setToolEvents([]);
+    setArtifacts([]);
     setSources([]);
     try {
       const response = await fetch("/api/research/stream", {
@@ -63,21 +65,33 @@ export function ResearchForm() {
             "DRAFT_READY",
             "CRITIC_REVIEWED",
             "COORDINATOR_COMPLETED",
+            "task_started",
+            "plan_updated",
+            "tool_started",
+            "tool_completed",
+            "tool_failed",
+            "evidence_added",
+            "verification_completed",
+            "artifact_created",
           ].includes(event.type)
         ) {
           setToolEvents((items) => [...items, event.message ?? event.type]);
         }
+        if (event.type === "artifact_created" && event.message) {
+          setArtifacts((items) => [...items, event.message!]);
+        }
         if (event.type === "RETRIEVAL_COMPLETED")
           setSources(event.sources ?? []);
-        if (event.type === "AGENT_STARTED") setStatus("running");
+        if (event.type === "AGENT_STARTED" || event.type === "task_started")
+          setStatus("running");
         if (event.type === "REPORT_PREVIEW") setReport(event.report ?? "");
         if (event.type === "REPORT_DELTA")
           setReport((value) => value + (event.text ?? ""));
-        if (event.type === "AGENT_COMPLETED") {
-          setReport(event.report ?? "");
+        if (event.type === "AGENT_COMPLETED" || event.type === "task_completed") {
+          if (event.report) setReport(event.report);
           setStatus("completed");
         }
-        if (event.type === "AGENT_FAILED") {
+        if (event.type === "AGENT_FAILED" || event.type === "task_failed") {
           setStatus("failed");
           setError(event.message ?? "研究失败");
         }
@@ -138,6 +152,16 @@ export function ResearchForm() {
             ))}
           </ol>
         </details>
+      )}
+      {artifacts.length > 0 && (
+        <section aria-label="生成文件">
+          <h3>生成文件</h3>
+          <ul>
+            {artifacts.map((art, index) => (
+              <li key={index}>{art}</li>
+            ))}
+          </ul>
+        </section>
       )}
       {report && (
         <article aria-label="初步研究报告">

@@ -7,13 +7,15 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "pnpm --filter @research-lab/api dev",
     "build": "turbo build",
     "typecheck": "turbo typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "turbo test"
+    "test": "turbo test",
+    "cli": "pnpm --filter @research-lab/cli start",
+    "dev:web": "pnpm --filter @research-lab/web dev"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

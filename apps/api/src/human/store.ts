@@ -1,3 +1,11 @@
+import { savedReport } from "../research/report.js";
+import {
+  newTurn,
+  contentKind,
+  summarizeTitle,
+  type TurnMetadata,
+  type ContentEventMetadata,
+} from "./contract.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Database } from "../rag/store.js";
 import type { LoopSnapshot } from "../research/loop.js";
@@ -22,7 +30,9 @@ export interface Approval {
 }
 export interface HumanTask {
   id: string;
+  title?: string;
   question: string;
+  turn: TurnMetadata;
   status: Status;
   snapshot: LoopSnapshot | null;
   approval: Approval | null;
@@ -33,6 +43,59 @@ export interface HumanTask {
   createdAt: string;
   updatedAt: string;
   configKey: string;
+  history?: {
+    turn: TurnMetadata;
+    question: string;
+    report: string;
+    snapshot: LoopSnapshot | null;
+    status: Status;
+    completedAt: string;
+    error?: string;
+  }[];
+}
+// JSON 存储按读取时补齐旧字段；确定性 ID 保证只读轮询不会改变身份。
+function normalizeTask(task: HumanTask): HumanTask {
+  let previousReport: string | null = null;
+  let previousRevision: number | null = null;
+  for (const [index, turn] of (task.history ?? []).entries()) {
+    turn.turn ??= newTurn(
+      task.id,
+      index + 1,
+      turn.question,
+      previousReport,
+      previousRevision,
+    );
+    if (turn.report && turn.turn.report.quality === "none") {
+      turn.turn.report.quality = "unreviewed";
+      turn.turn.report.revision = 1;
+    }
+    if (turn.report) {
+      previousReport = turn.turn.report.id;
+      previousRevision = turn.turn.report.revision;
+    }
+  }
+  task.turn ??= newTurn(
+    task.id,
+    (task.history?.length ?? 0) + 1,
+    task.question,
+    previousReport,
+    previousRevision,
+  );
+  if (task.report && task.turn.report.quality === "none") {
+    task.turn.report.quality = "unreviewed";
+    task.turn.report.revision = 1;
+  }
+  task.title ??= summarizeTitle(
+    task.history?.[0]?.question ?? task.question,
+  );
+  return task;
+}
+export interface AuditEvent extends Record<string, unknown> {
+  seq: string | number;
+  actor: string;
+  action: string;
+  detail: Record<string, unknown> & { _event?: ContentEventMetadata };
+  created_at: string | Date;
 }
 export class HumanConflict extends Error {}
 const hash = (key: string) => createHash("sha256").update(key).digest("hex");
@@ -60,7 +123,9 @@ export class HumanStore {
       now = new Date().toISOString();
     const task: HumanTask = {
       id,
+      title: summarizeTitle(question),
       question,
+      turn: newTurn(id, 1, question),
       status: clarify ? "pending" : "queued",
       snapshot: null,
       approval: clarify
@@ -88,7 +153,15 @@ export class HumanStore {
       ]);
       await sql.query(
         "INSERT INTO human_audit(task_id,actor,action,detail) VALUES($1,$2,'created',$3::jsonb)",
-        [id, actor, JSON.stringify({ clarify })],
+        [
+          id,
+          actor,
+          JSON.stringify({
+            clarify,
+            message: question,
+            _event: { roundId: task.turn.id, kind: "user_message" },
+          }),
+        ],
       );
     });
     return { task, key };
@@ -118,6 +191,13 @@ export class HumanStore {
         Date.parse(task.approval.expiresAt) <= Date.now()
       ) {
         task.status = "expired";
+        const fallback = savedReport(task);
+        task.report = fallback.report;
+        task.turn.report.quality = fallback.quality;
+        task.turn.stop = {
+          code: "cancelled",
+          message: "审批已过期，未执行待批准操作。",
+        };
         return {
           actor: "system",
           action: "expired",
@@ -130,11 +210,25 @@ export class HumanStore {
       [id, hash(key)],
     );
     if (!rows[0]) throw new HumanConflict("任务不存在或访问密钥不正确。");
-    const audit = await this.db.query(
+    const audit = await this.db.query<AuditEvent>(
       "SELECT seq,actor,action,detail,created_at FROM human_audit WHERE task_id=$1 ORDER BY seq",
       [id],
     );
-    return { ...rows[0].data, audit: audit.rows };
+    let round = 1;
+    return {
+      ...normalizeTask(rows[0].data),
+      audit: audit.rows.map((event) => {
+        if (event.action === "followup") round++;
+        return {
+          ...event,
+          id: `${id}:event:${event.seq}`,
+          roundId: event.detail._event?.roundId ?? `${id}:turn:${round}`,
+          kind:
+            event.detail._event?.kind ??
+            contentKind(event.action, event.detail),
+        };
+      }),
+    };
   }
   async change(
     id: string,
@@ -149,9 +243,16 @@ export class HumanStore {
         [id, hash(key)],
       );
       if (!rows[0]) throw new HumanConflict("任务不存在或访问密钥不正确。");
-      const task = rows[0].data;
+      const task = normalizeTask(rows[0].data);
+      const previousReport = task.report;
+      const previousRound = task.turn.id;
       const event = work(task);
       if (event) {
+        if (task.turn.id === previousRound && task.report !== previousReport) {
+          task.turn.report.revision++;
+          if (task.turn.report.quality === "none")
+            task.turn.report.quality = "unreviewed";
+        }
         task.updatedAt = new Date().toISOString();
         await sql.query("UPDATE human_tasks SET data=$2::jsonb WHERE id=$1", [
           id,
@@ -159,10 +260,60 @@ export class HumanStore {
         ]);
         await sql.query(
           "INSERT INTO human_audit(task_id,actor,action,detail) VALUES($1,$2,$3,$4::jsonb)",
-          [id, event.actor, event.action, JSON.stringify(event.detail)],
+          [
+            id,
+            event.actor,
+            event.action,
+            JSON.stringify({
+              ...(event.detail as Record<string, unknown>),
+              _event: {
+                roundId: task.turn.id,
+                kind: contentKind(
+                  event.action,
+                  event.detail as Record<string, unknown>,
+                ),
+              },
+            }),
+          ],
         );
       }
       return task;
+    });
+  }
+  async followup(id: string, key: string, question: string, actor: string) {
+    return this.change(id, key, (task) => {
+      if (["running", "pending", "queued", "ready"].includes(task.status))
+        throw new HumanConflict("请先完成当前轮次。");
+      const previous = {
+        turn: structuredClone(task.turn),
+        question: task.question,
+        report: task.report,
+        snapshot: task.snapshot,
+        status: task.status,
+        completedAt: task.updatedAt,
+        error: task.error,
+      };
+      task.history = [...(task.history ?? []), previous];
+      task.turn = newTurn(
+        task.id,
+        task.history.length + 1,
+        question,
+        task.report ? task.turn.report.id : task.turn.basedOnReportId,
+        task.report
+          ? task.turn.report.revision
+          : task.turn.basedOnReportRevision,
+      );
+      task.question = question;
+      task.snapshot = null;
+      task.report = "";
+      task.error = "";
+      task.approval = null;
+      task.status = "ready";
+      return {
+        actor,
+        action: "followup",
+        detail: { question, message: question, round: task.history.length + 1 },
+      };
     });
   }
   async decide(
@@ -182,22 +333,56 @@ export class HumanStore {
       )
         throw new HumanConflict("审批已处理、已过期或版本不匹配。");
       const approval = task.approval;
+      if (
+        approve &&
+        approval.kind === "clarification" &&
+        task.turn.intent === "clarify" &&
+        !value?.trim()
+      )
+        throw new HumanConflict("请填写澄清内容后再继续。");
       if (approve && value !== undefined) {
-        if (approval.kind === "clarification") task.question = value;
-        else if (task.snapshot) {
+        if (approval.kind === "clarification") {
+          task.question = value;
+          task.turn.goal = value;
+        } else if (task.snapshot) {
           const queryKey = `${task.snapshot.state.plan.action}:${value.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase()}`;
           if (task.snapshot.state.queries.includes(queryKey))
             throw new HumanConflict("调整后的查询与已执行查询重复。");
           task.snapshot.state.plan.query = value;
+          task.turn.query = value;
         }
       }
       task.status = approve ? "ready" : "rejected";
+      if (!approve) {
+        const fallback = savedReport(task);
+        task.report = fallback.report;
+        task.turn.report.quality = fallback.quality;
+        task.turn.stop = {
+          code: "cancelled",
+          message: "用户拒绝本次计划，未继续执行。",
+        };
+      }
       task.approval = null;
       return {
         actor,
         action: approve ? "approved" : "rejected",
         detail: { approval, value: value ?? null },
       };
+    });
+  }
+  async delete(id: string, key: string) {
+    return this.db.transaction(async (sql) => {
+      const { rows } = await sql.query<{ id: string }>(
+        "SELECT id FROM human_tasks WHERE id=$1 AND key_hash=$2 FOR UPDATE",
+        [id, hash(key)],
+      );
+      if (!rows[0]) throw new HumanConflict("任务不存在或访问密钥不正确。");
+      await sql.query("DELETE FROM human_audit WHERE task_id=$1", [id]);
+      await sql.query("DELETE FROM human_tasks WHERE id=$1 AND key_hash=$2", [
+        id,
+        hash(key),
+      ]);
+      return { deleted: true, id };
     });
   }
 }

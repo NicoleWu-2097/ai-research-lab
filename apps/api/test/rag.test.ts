@@ -341,3 +341,25 @@ it("rejects unsupported upload formats and foreign origins before indexing", asy
     ).status,
   ).toBe(403);
 });
+it("explains an unavailable embedding service without exposing SDK details", async () => {
+  const unavailable = new RagService(
+    store,
+    {
+      ...embedding,
+      async embed() {
+        throw new TypeError("fetch failed", {
+          cause: { code: "ECONNREFUSED" },
+        });
+      },
+    },
+    root,
+  );
+  const form = new FormData();
+  form.append("file", new File(["valid text"], "notes.md"));
+  const response = await createApp(model, 10000, null, unavailable).request(
+    "http://localhost/api/rag/upload",
+    { method: "POST", body: form },
+  );
+  expect(response.status).toBe(503);
+  expect((await response.json()).error).toContain("ollama serve");
+});

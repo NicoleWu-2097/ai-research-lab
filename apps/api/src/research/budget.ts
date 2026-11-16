@@ -13,25 +13,30 @@ export class ResearchBudget {
   units = 0;
   retries = 0;
   constructor(
-    readonly maxCalls = 12,
-    readonly maxUnits = 1600000,
+    readonly maxCalls = 28,
+    readonly maxUnits = 3200000,
   ) {}
-  reserve(units: number) {
-    if (this.calls >= this.maxCalls || this.units + units > this.maxUnits)
+  reserve(units: number, holdFinal = false) {
+    if (
+      this.calls >= this.maxCalls - (holdFinal ? 1 : 0) ||
+      this.units + units >
+        this.maxUnits - (holdFinal ? Math.min(64000, this.maxUnits) : 0)
+    )
       throw new BudgetExceeded();
     this.calls++;
     this.units += units;
   }
-  remote() {
-    this.reserve(200000);
+  remote(holdFinal = false) {
+    this.reserve(200000, holdFinal);
   }
-  wrap(provider: ModelProvider): ModelProvider {
+  wrap(provider: ModelProvider, holdFinal = false): ModelProvider {
     const reserve = (prompt: string, schema = "") =>
       this.reserve(
         Buffer.byteLength(prompt) +
           2 * Buffer.byteLength(schema) +
           2048 +
           MAX_OUTPUT_TOKENS,
+        holdFinal,
       );
     const call = async <T>(
       prompt: string,

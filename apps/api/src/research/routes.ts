@@ -8,7 +8,7 @@ import { runResearchLoop } from "./loop.js";
 import { runResearch } from "./workflow.js";
 import { McpToolError, type ResearchTools } from "../mcp/client.js";
 import { RagError, type RagService } from "../rag/service.js";
-import { runAgenticResearch } from "./agentic.js";
+import { runAgenticResearch, type LocalRetriever } from "./agentic.js";
 
 import {
   createRemoteAgents,
@@ -29,6 +29,7 @@ export function researchRoutes(
   multiAgent = false,
   endpoints: AgentEndpoints | null = null,
   loop = false,
+  web: LocalRetriever | null = null,
 ) {
   const routes = new Hono();
   routes.post("/stream", async (context) => {
@@ -55,7 +56,11 @@ export function researchRoutes(
       const deadline = createDeadline(context.req.raw.signal, timeoutMs);
       stream.onAbort(deadline.cancel);
       let sequence = 0;
+      let timedOut = false;
       const emit = async (type: string, payload: Record<string, unknown>) => {
+        if (type === "RESEARCH_STOPPED" && payload.code === "timeout") {
+          timedOut = true;
+        }
         const event = {
           taskId,
           sequence: ++sequence,
@@ -92,6 +97,11 @@ export function researchRoutes(
               tools,
               emit,
               endpoints ? createRemoteAgents(endpoints, emit) : null,
+              undefined,
+              undefined,
+              web,
+              "",
+              timeoutMs,
             )
           : agentic
             ? await runAgenticResearch(
@@ -114,6 +124,14 @@ export function researchRoutes(
                 emit,
               );
         deadline.signal.throwIfAborted();
+        if (timedOut) {
+          await emit("AGENT_FAILED", {
+            status: "failed",
+            code: "MODEL_TIMEOUT",
+            message: "Execution time exhausted.",
+          });
+          return;
+        }
         await emit("AGENT_COMPLETED", { status: "completed", report });
       } catch (error) {
         const failure =

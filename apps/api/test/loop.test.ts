@@ -106,7 +106,7 @@ it("plans, researches, analyzes, critiques and publishes only a quoted final rep
   expect(report).toContain("[RAG:1] 原文：“one data service”");
   expect(test.deltas).toEqual([report]);
   expect(test.local.retrieve.mock.calls[0]).toEqual([
-    "first question",
+    "followup",
     expect.any(AbortSignal),
   ]);
   expect(test.events.at(-1)).toMatchObject({
@@ -135,14 +135,25 @@ it("turns Critic feedback into new research and preserves citation identity", as
   ]);
   expect(test.agents.research).toHaveBeenCalledTimes(2);
 });
-it("requires follow-up for unresolved questions even when Critic approves", async () => {
-  const test = fixture([
-    plan(),
+it("continues up to five rounds while unresolved evidence remains", async () => {
+  const steps = Array.from({ length: 5 }, (_, i) => [
+    plan("local", "query " + i),
     analysis("RAG:1", "one data service", ["缺少性能实测"]),
-    plan("stop"),
-  ]);
-  expect(await test.run()).toContain("缺少性能实测");
-  expect(test.deltas[0]).toContain("待核验报告");
+  ]).flat();
+  const test = fixture(
+    steps,
+    Array(5).fill(approve),
+    Array(5).fill([hit("a")]),
+  );
+  const report = await test.run();
+  expect(test.local.retrieve).toHaveBeenCalledTimes(5);
+  expect(report).toContain("缺少性能实测");
+  expect(test.events).toContainEqual(
+    expect.objectContaining({
+      type: "RESEARCH_STOPPED",
+      message: "已达到五轮取证上限",
+    }),
+  );
 });
 it.each([
   ["RAG:9", "one data service"],
@@ -152,39 +163,22 @@ it.each([
   expect(await test.run()).toContain("待核验");
   expect(test.deltas).toHaveLength(1);
 });
-it("stops repeated queries and supplemental research with no new evidence", async () => {
-  const duplicate = fixture(
-    [plan(), analysis(), plan("local", " FIRST  QUESTION ")],
-    [revise],
-  );
-  expect(await duplicate.run()).toContain("重复");
-  expect(duplicate.local.retrieve).toHaveBeenCalledTimes(1);
-  const noNew = fixture(
-    [plan(), analysis(), plan()],
-    [revise],
-    [[hit("a")], [hit("a")]],
-  );
-  expect(await noNew.run()).toContain("未取得新证据");
-  expect(noNew.agents.research).toHaveBeenCalledTimes(1);
-});
-it("allows an empty initial lookup to be followed up and stops spent local capability", async () => {
+it("does not end after an empty or repeated retrieval before five rounds", async () => {
   const test = fixture(
-    [plan(), plan(), analysis()],
-    [approve],
-    [[], [hit("a")]],
+    Array.from({ length: 5 }, () => plan()),
+    [],
+    Array(5).fill([]),
   );
-  expect(await test.run()).toContain("原文");
-  const spent = fixture(
-    [plan(), analysis(), plan(), analysis(), plan("local", "third")],
-    [revise, revise],
-  );
-  expect(await spent.run()).toContain("预算耗尽");
-  expect(spent.local.retrieve).toHaveBeenCalledTimes(2);
+  expect((await test.run()).length).toBeGreaterThan(0);
+  expect(test.local.retrieve).toHaveBeenCalledTimes(5);
 });
 it("stops before spending more calls or reservation units than authorized", async () => {
   for (const budget of [new ResearchBudget(1), new ResearchBudget(12, 1)]) {
     const test = fixture([plan(), analysis()]);
-    expect(await test.run(budget)).toContain("预算已耗尽");
+    expect(await test.run(budget)).toContain("研究阶段报告");
+    expect(test.events).toContainEqual(
+      expect.objectContaining({ type: "RESEARCH_STOPPED", code: "budget" }),
+    );
     expect(budget.calls).toBeLessThanOrEqual(budget.maxCalls);
     expect(budget.units).toBeLessThanOrEqual(budget.maxUnits);
   }
@@ -198,17 +192,22 @@ it("permits one transient nonstreaming retry and never retries invalid output", 
   await test.run();
   expect(test.events.at(-1)).toMatchObject({ retries: 1 });
   const invalid = fixture([new ModelError("MODEL_INVALID_OUTPUT", "bad")]);
-  await expect(invalid.run()).rejects.toMatchObject({
-    code: "MODEL_INVALID_OUTPUT",
-  });
+  expect(await invalid.run()).toContain("研究阶段报告");
+  expect(invalid.events).toContainEqual(
+    expect.objectContaining({
+      type: "RESEARCH_STOPPED",
+      code: "review_format",
+    }),
+  );
   expect(invalid.prompts).toHaveLength(1);
   const twice = fixture([
     new ModelError("MODEL_PROVIDER_ERROR", "temporary"),
     new ModelError("MODEL_PROVIDER_ERROR", "again"),
   ]);
-  await expect(twice.run()).rejects.toMatchObject({
-    code: "MODEL_PROVIDER_ERROR",
-  });
+  expect(await twice.run()).toContain("研究阶段报告");
+  expect(twice.events).toContainEqual(
+    expect.objectContaining({ type: "RESEARCH_STOPPED", code: "model_error" }),
+  );
   expect(twice.prompts).toHaveLength(2);
 });
 it("skips retrieval and Critic on a direct greeting", async () => {
@@ -220,13 +219,22 @@ it("skips retrieval and Critic on a direct greeting", async () => {
 it("does not turn tool failures or inconsistent reviews into sufficient evidence", async () => {
   const test = fixture([plan()]);
   test.local.retrieve.mockRejectedValueOnce(new Error("database offline"));
-  await expect(test.run()).rejects.toThrow("database offline");
-  expect(test.deltas).toEqual([]);
+  expect(await test.run()).toContain("研究阶段报告");
+  expect(test.deltas).toHaveLength(1);
+  expect(test.events).toContainEqual(
+    expect.objectContaining({ type: "RESEARCH_STOPPED", code: "tool_error" }),
+  );
   const invalid = fixture(
     [plan(), analysis()],
     [{ ...approve, issues: ["conflict"] }],
   );
-  expect(await invalid.run()).toContain("审查输出无效");
+  expect(await invalid.run()).toContain("待核验报告");
+  expect(invalid.events).toContainEqual(
+    expect.objectContaining({
+      type: "RESEARCH_STOPPED",
+      code: "review_format",
+    }),
+  );
 });
 it("cancels stalled remote analysis and times out an HTTP plan", async () => {
   const test = fixture([plan()]);
@@ -259,8 +267,8 @@ it("cancels stalled remote analysis and times out an HTTP plan", async () => {
     body: JSON.stringify({ question: "why" }),
   });
   const body = await response.text();
-  expect(body).toContain("MODEL_TIMEOUT");
-  expect(body).not.toContain('"type":"AGENT_COMPLETED"');
+  expect(body).toContain('"code":"timeout"');
+  expect(body).toContain('"type":"REPORT_DELTA"');
 });
 it("charges local role calls and schemas through the same budget", async () => {
   const test = fixture([]);
@@ -280,54 +288,16 @@ it("charges local role calls and schemas through the same budget", async () => {
   expect(budget.calls).toBe(3);
   expect(budget.units).toBeGreaterThan(3 * 4096);
 });
-it("enforces three total research rounds across local and MCP capabilities", async () => {
-  const test = fixture(
-    [
-      plan(),
-      analysis(),
-      plan("local", "second"),
-      analysis(),
-      plan("mcp", "third"),
-      analysis(),
-    ],
-    [revise, revise, revise],
-  );
-  const tools = {
-    async collect() {
-      return [
-        {
-          id: "c.md",
-          content: "third one data service",
-          sha256: "a".repeat(64),
-          retrievedAt: new Date().toISOString(),
-        },
-      ];
-    },
-  };
-  const report = await runResearchLoop(
-    "first",
-    test.provider,
-    new AbortController().signal,
-    async () => {},
-    test.local,
-    tools,
-    async () => {},
-    test.agents,
-  );
-  expect(report).toContain("研究轮次或来源预算已用完");
-  expect(test.agents.critique).toHaveBeenCalledTimes(3);
-  expect(test.prompts).toHaveLength(6);
-});
-it("caps cumulative evidence at eight chunks", async () => {
+it("retains up to forty evidence chunks while continuing bounded research", async () => {
   const test = fixture(
     [plan(), analysis()],
-    [revise],
-    [Array.from({ length: 10 }, (_, i) => hit(String(i)))],
+    [approve],
+    [Array.from({ length: 45 }, (_, i) => hit(String(i)))],
   );
-  expect(await test.run()).toContain("来源预算");
+  await test.run();
   expect(
     test.events.find((e) => e.type === "RETRIEVAL_COMPLETED")?.sources,
-  ).toHaveLength(8);
+  ).toHaveLength(40);
 });
 it("runs actual local role adapters and includes their calls in the shared budget", async () => {
   const test = fixture([plan(), analysis(), approve]);
@@ -348,4 +318,84 @@ it("runs actual local role adapters and includes their calls in the shared budge
   );
   expect(report).toContain("原文");
   expect(budget.calls).toBe(4);
+});
+
+it("reserves the last model call for synthesis when analysis cannot start", async () => {
+  const test = fixture([plan()]);
+  const generate = vi
+    .spyOn(test.provider, "generate")
+    .mockResolvedValue("已取得单库依据 [RAG:1]");
+  const budget = new ResearchBudget(2);
+  const report = await test.run(budget);
+  expect(generate).toHaveBeenCalledTimes(1);
+  expect(report).toContain("已取得单库依据");
+  expect(report).toContain("待核验");
+  expect(budget.calls).toBe(2);
+});
+
+it("falls back to retrieved excerpts if the final synthesis also fails", async () => {
+  const test = fixture([plan()]);
+  vi.spyOn(test.provider, "generate").mockRejectedValue(new Error("offline"));
+  const budget = new ResearchBudget(2);
+  const report = await test.run(budget);
+  expect(report).toContain("原文片段");
+  expect(report).toContain("one data service");
+  expect(report).not.toContain("offline");
+  expect(budget.calls).toBe(2);
+});
+
+it("lists actual web source URLs in the final report", async () => {
+  const test = fixture([plan("web"), analysis()]);
+  const web = {
+    retrieve: vi.fn(async () => [
+      { ...hit("a"), url: "https://example.com/research", title: "研究原文" },
+    ]),
+  };
+  const report = await runResearchLoop(
+    "联网研究",
+    test.provider,
+    new AbortController().signal,
+    async () => {},
+    null,
+    null,
+    async () => {},
+    test.agents,
+    new ResearchBudget(),
+    undefined,
+    web,
+  );
+  expect(report).toContain("## 联网检索出处");
+  expect(report).toContain("[RAG:1] 研究原文 — <https://example.com/research>");
+});
+
+it("allows five web searches when evidence gaps persist", async () => {
+  const test = fixture(
+    Array.from({ length: 5 }, (_, i) => [
+      plan("web", `evidence ${i}`),
+      analysis("RAG:1", "one data service", ["缺少性能数据"]),
+    ]).flat(),
+    Array(5).fill(revise),
+  );
+  const web = {
+    retrieve: vi.fn(async () => [
+      { ...hit("a"), url: "https://example.com/source" },
+    ]),
+  };
+  const budget = new ResearchBudget();
+  const report = await runResearchLoop(
+    "联网研究",
+    test.provider,
+    new AbortController().signal,
+    async () => {},
+    null,
+    null,
+    async () => {},
+    test.agents,
+    budget,
+    undefined,
+    web,
+  );
+  expect(web.retrieve).toHaveBeenCalledTimes(5);
+  expect(report).toContain("https://example.com/source");
+  expect(budget.calls).toBeLessThanOrEqual(28);
 });

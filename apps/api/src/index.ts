@@ -1,4 +1,4 @@
-import { BraveSearch } from "./search/brave.js";
+import { BraveSearch, DynamicBraveSearch } from "./search/brave.js";
 import { createHash } from "node:crypto";
 import { HumanStore } from "./human/store.js";
 import { HumanService } from "./human/service.js";
@@ -46,9 +46,18 @@ const tools =
   config.MCP_ENABLED === "true" ? new McpDocumentTools(documentRoot) : null;
 const rag = config.RAG_ENABLED === "true" ? createRag(process.env) : null;
 const endpoints = readAgentEndpoints(process.env);
+const braveApiKey = (
+  process.env.BRAVE_SEARCH_API_KEY ??
+  process.env.BRAVE_API_KEY ??
+  ""
+).trim();
 const web =
   process.env.WEB_SEARCH_ENABLED === "true"
-    ? new BraveSearch(z.string().min(1).parse(process.env.BRAVE_SEARCH_API_KEY))
+    ? braveApiKey.length > 0
+      ? new BraveSearch(braveApiKey)
+      : config.HUMAN_ENABLED === "true"
+        ? new DynamicBraveSearch()
+        : null
     : null;
 if (web && config.HUMAN_ENABLED !== "true")
   throw new Error("Web search requires durable human mode");
@@ -79,10 +88,11 @@ if (config.HUMAN_ENABLED === "true") {
     .update(
       JSON.stringify({
         version: 1,
-        web: !!web,
+        openaiEndpoint: process.env.OPENAI_BASE_URL,
+        openaiStyle: process.env.OPENAI_API_STYLE,
+        openaiAuth: process.env.OPENAI_AUTH_HEADER,
         model: provider.model,
         provider: provider.provider,
-        timeout: modelConfig?.timeoutMs,
         root: documentRoot,
         endpoints,
         rag: !!rag,
@@ -114,6 +124,7 @@ const app = createApp(
     config.AGENTIC_RAG_ENABLED === "true" &&
     config.MULTI_AGENT_ENABLED === "true",
   human,
+  web,
 );
 
 const server = serve({

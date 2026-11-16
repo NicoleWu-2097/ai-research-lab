@@ -5,6 +5,7 @@ export interface ResearchEvent {
   text?: string;
   report?: string;
   message?: string;
+  data?: Record<string, unknown>;
   sources?: {
     id: string;
     chunkId: string;
@@ -83,6 +84,8 @@ export async function readResearchStream(
           "AGENT_COMPLETED",
           "AGENT_FAILED",
           "TASK_CANCELLED",
+          "task_completed",
+          "task_failed",
         ].includes(parsed.type);
       }
       if (done) break;

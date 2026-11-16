@@ -8,10 +8,14 @@ import { researchRoutes } from "./research/routes.js";
 import type { ResearchTools } from "./mcp/client.js";
 import type { RagService } from "./rag/service.js";
 import { ragRoutes } from "./rag/routes.js";
+import { AtlasAgentRuntime } from "./agent/runtime.js";
+import { agentRoutes } from "./agent/routes.js";
 
 import { createDeadline, raceWithAbort } from "./model/deadline.js";
 import { requireModelProvider } from "./model/config.js";
 import { ModelError, toModelError, type ModelProvider } from "./model/types.js";
+
+import type { LocalRetriever } from "./research/agentic.js";
 
 const promptSchema = z.object({ prompt: z.string().trim().min(1).max(8_000) });
 
@@ -41,6 +45,7 @@ export function createApp(
   endpoints: AgentEndpoints | null = null,
   loop = false,
   human: HumanService | null = null,
+  web: LocalRetriever | null = null,
 ) {
   const app = new Hono();
   if (human) {
@@ -60,9 +65,14 @@ export function createApp(
       multiAgent,
       endpoints,
       loop,
+      web,
     ),
   );
   app.route("/api/rag", ragRoutes(rag, timeoutMs));
+  const agentRuntime = new AtlasAgentRuntime(provider, rag, web, {
+    timeoutMs,
+  });
+  app.route("/api/agent", agentRoutes(agentRuntime, timeoutMs));
 
   app.get("/api/health", (context) =>
     context.json({

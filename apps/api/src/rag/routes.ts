@@ -18,6 +18,10 @@ export function ragRoutes(rag: RagService | null, timeoutMs: number) {
     try {
       const body = await c.req.parseBody();
       const file = body.file;
+      const projectId =
+        typeof body.projectId === "string" && body.projectId.trim()
+          ? body.projectId.trim()
+          : undefined;
       if (
         !(file instanceof File) ||
         !/\.(md|txt)$/i.test(file.name) ||
@@ -34,16 +38,30 @@ export function ragRoutes(rag: RagService | null, timeoutMs: number) {
         return c.json({ error: "文件为空或不是文本。" }, 400);
       return c.json(
         await raceWithAbort(
-          rag.upload(file.name, content, deadline.signal),
+          rag.upload(file.name, content, deadline.signal, projectId),
           deadline.signal,
         ),
         201,
       );
-    } catch {
-      return c.json(
-        { error: "上传索引失败，请检查文件编码、RAG 配置及 embedding 服务。" },
-        503,
-      );
+    } catch (error) {
+      // 只返回可操作的分类，不透传可能包含服务地址或凭证的 SDK 异常。
+      const cause = error instanceof Error ? error.cause : undefined;
+      const code =
+        cause && typeof cause === "object" && "code" in cause
+          ? cause.code
+          : undefined;
+      const message = deadline.signal.aborted
+        ? "上传索引超时，请检查 embedding 服务并重试。"
+        : code === "ECONNREFUSED"
+          ? "无法连接 embedding 服务。使用本地 Ollama 时，请先运行 ollama serve。"
+          : error instanceof TypeError &&
+              /encoded data|encoding/i.test(error.message)
+            ? "文件不是有效的 UTF-8 文本，请转换编码后重试。"
+            : error instanceof Error &&
+                error.message === "Reingest before uploading"
+              ? "embedding 配置与现有索引不一致，请先重新摄取资料。"
+              : "上传索引失败，请检查 embedding 模型、向量维度及数据库配置。";
+      return c.json({ error: message }, 503);
     } finally {
       deadline.dispose();
     }
@@ -62,7 +80,10 @@ export function ragRoutes(rag: RagService | null, timeoutMs: number) {
   });
   routes.post("/retrieve", async (context) => {
     const body = z
-      .object({ question: z.string().trim().min(1).max(8000) })
+      .object({
+        question: z.string().trim().min(1).max(8000),
+        projectId: z.string().trim().min(1).optional(),
+      })
       .safeParse(await context.req.json().catch(() => null));
     if (!body.success)
       return context.json(
@@ -74,7 +95,11 @@ export function ragRoutes(rag: RagService | null, timeoutMs: number) {
     try {
       return context.json({
         sources: await raceWithAbort(
-          rag.retrieve(body.data.question, deadline.signal),
+          rag.retrieve(
+            body.data.question,
+            deadline.signal,
+            body.data.projectId,
+          ),
           deadline.signal,
         ),
       });
@@ -83,6 +108,49 @@ export function ragRoutes(rag: RagService | null, timeoutMs: number) {
         {
           error:
             "Retrieval unavailable; check RAG health, embedding service and ingestion.",
+        },
+        503,
+      );
+    } finally {
+      deadline.dispose();
+    }
+  });
+  routes.post("/search", async (context) => {
+    const body = z
+      .object({
+        query: z.string().trim().min(1).max(8000),
+        projectId: z.string().trim().min(1).optional(),
+        documentIds: z.array(z.string()).optional(),
+        topK: z.number().int().min(1).max(20).optional(),
+        strategy: z.enum(["dense", "bm25", "hybrid"]).optional(),
+        filters: z
+          .object({
+            source: z.string().optional(),
+            section: z.string().optional(),
+            page: z.number().int().optional(),
+            minScore: z.number().optional(),
+          })
+          .optional(),
+      })
+      .safeParse(await context.req.json().catch(() => null));
+    if (!body.success)
+      return context.json(
+        { error: "Provide a valid searchKnowledgeBase payload." },
+        400,
+      );
+    if (!rag) return context.json({ error: "RAG is disabled." }, 503);
+    const deadline = createDeadline(context.req.raw.signal, timeoutMs);
+    try {
+      const result = await raceWithAbort(
+        rag.searchKnowledgeBase(body.data, deadline.signal),
+        deadline.signal,
+      );
+      return context.json(result);
+    } catch {
+      return context.json(
+        {
+          error:
+            "Knowledge base search failed; check RAG health and embedding service.",
         },
         503,
       );

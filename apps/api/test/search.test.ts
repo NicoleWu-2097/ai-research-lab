@@ -29,8 +29,51 @@ it("keeps snippet provenance and sends credentials only to the search endpoint",
   });
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(String(fetcher.mock.calls[0]![0])).toContain(
-    "https://api.search.brave.com/",
+    "https://api.search.brave.com/res/v1/llm/context",
   );
+});
+it("parses Brave LLM Context grounding.generic snippets and sources metadata", async () => {
+  const fetcher = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        grounding: {
+          generic: [
+            {
+              url: "https://docs.brave.com/llm-context",
+              title: "",
+              snippets: [
+                "First extracted LLM context chunk.",
+                "<b>Second</b> grounded chunk.",
+              ],
+            },
+          ],
+        },
+        sources: {
+          "https://docs.brave.com/llm-context": {
+            title: "Brave LLM Context Documentation",
+            hostname: "docs.brave.com",
+          },
+        },
+      }),
+    ),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const hits = await new BraveSearch("secret-key", {
+    count: 3,
+    freshness: "pw",
+  }).retrieve("brave llm context", new AbortController().signal);
+  expect(hits).toHaveLength(1);
+  expect(hits[0]).toMatchObject({
+    url: "https://docs.brave.com/llm-context",
+    title: "Brave LLM Context Documentation",
+    content: "First extracted LLM context chunk.\n\nSecond grounded chunk.",
+    sourceKind: "search_snippet",
+  });
+  const calledUrl = String(fetcher.mock.calls[0]![0]);
+  expect(calledUrl).toContain(
+    "https://api.search.brave.com/res/v1/llm/context",
+  );
+  expect(calledUrl).toContain("freshness=pw");
 });
 it("does not disguise provider failure as empty evidence", async () => {
   vi.stubGlobal(

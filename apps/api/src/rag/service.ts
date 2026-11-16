@@ -3,9 +3,24 @@ import { listDocuments, readDocument } from "../mcp/documents.js";
 import type { ResearchTools, ToolEventSink } from "../mcp/client.js";
 import type { ModelProvider } from "../model/types.js";
 import { raceWithAbort } from "../model/deadline.js";
-import { chunkDocument, type Chunk } from "./chunks.js";
+import {
+  buildKnowledgeChunks,
+  chunkDocument,
+  type Chunk,
+  type Hit,
+} from "./chunks.js";
 import { validateVectors, type Embedder } from "./embedding.js";
 import { VectorStore } from "./store.js";
+import {
+  applyMetadataFilters,
+  bm25Search,
+  deduplicateAndExpandHits,
+  reciprocalRankFusion,
+  rerankAndFilterHits,
+  rewriteAndExpandQueries,
+  type SearchKnowledgeBaseInput,
+  type SearchKnowledgeBaseResult,
+} from "./hybrid.js";
 import { resolve } from "node:path";
 
 export class RagError extends Error {
@@ -61,15 +76,37 @@ export class RagService implements ResearchTools {
     return { documents: seen.size, duplicates, chunks: chunks.length };
   }
 
-  async upload(name: string, content: string, signal: AbortSignal) {
+  async upload(
+    name: string,
+    content: string,
+    signal: AbortSignal,
+    projectId?: string,
+  ) {
     const sha256 = createHash("sha256").update(content).digest("hex");
-    const id = `upload-${sha256}.md`;
-    const chunks = chunkDocument({
+    const id = projectId
+      ? `upload-${projectId}-${sha256}.md`
+      : `upload-${sha256}.md`;
+    const docSource = {
       id,
       content,
       sha256,
       retrievedAt: new Date().toISOString(),
-    }).map((chunk) => ({ ...chunk, filename: name }));
+    };
+    const chunks = (
+      projectId
+        ? buildKnowledgeChunks(docSource, {
+            projectId,
+            source: name,
+            title: name,
+            embeddingModel: this.embedder.key,
+            embeddingVersion: "chars900-overlap120-v1",
+          })
+        : chunkDocument(docSource)
+    ).map((chunk) => ({
+      ...chunk,
+      filename: name,
+      ...(projectId ? { projectId } : {}),
+    }));
     const vectors: number[][] = [];
     for (let i = 0; i < chunks.length; i += 16) {
       const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
@@ -83,15 +120,84 @@ export class RagService implements ResearchTools {
     }
     signal.throwIfAborted();
     await this.store.initialize();
-    await this.store.append(this.indexKey, chunks, vectors, signal);
-    return { id, name, chunks: chunks.length };
+    await this.store.append(this.indexKey, chunks, vectors, signal, {
+      id,
+      projectId: projectId ?? "default",
+      name,
+      content,
+      sha256,
+      embeddingKey: this.indexKey,
+      updatedAt: new Date().toISOString(),
+    });
+    return {
+      id,
+      name,
+      chunks: chunks.length,
+      ...(projectId ? { projectId } : {}),
+    };
+  }
+
+  async updateDocument(
+    documentId: string,
+    name: string,
+    content: string,
+    signal: AbortSignal,
+    projectId = "default",
+  ) {
+    await this.store.initialize();
+    await this.store.deleteDocument(documentId, projectId);
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    const docSource = {
+      id: documentId,
+      content,
+      sha256,
+      retrievedAt: new Date().toISOString(),
+    };
+    const chunks = buildKnowledgeChunks(docSource, {
+      projectId,
+      source: name,
+      title: name,
+      embeddingModel: this.embedder.key,
+      embeddingVersion: "chars900-overlap120-v1",
+    }).map((c) => ({ ...c, filename: name }));
+
+    const vectors: number[][] = [];
+    for (let i = 0; i < chunks.length; i += 16) {
+      const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
+      vectors.push(
+        ...validateVectors(
+          await this.embedder.embed(texts, signal),
+          texts.length,
+          this.embedder.dimensions,
+        ),
+      );
+    }
+    await this.store.append(this.indexKey, chunks, vectors, signal, {
+      id: documentId,
+      projectId,
+      name,
+      content,
+      sha256,
+      embeddingKey: this.indexKey,
+      updatedAt: new Date().toISOString(),
+    });
+    return { id: documentId, name, projectId, chunks: chunks.length };
+  }
+
+  async deleteDocument(documentId: string, projectId?: string) {
+    await this.store.initialize();
+    return this.store.deleteDocument(documentId, projectId);
   }
 
   health() {
     return this.store.health(this.indexKey);
   }
 
-  async retrieve(question: string, signal: AbortSignal) {
+  async retrieve(
+    question: string,
+    signal: AbortSignal,
+    projectId?: string,
+  ): Promise<Hit[]> {
     try {
       const vectors = validateVectors(
         await raceWithAbort(this.embedder.embed([question], signal), signal),
@@ -100,9 +206,152 @@ export class RagService implements ResearchTools {
       );
       signal.throwIfAborted();
       return await raceWithAbort(
-        this.store.search(this.indexKey, vectors[0]!, 4, this.minScore),
+        this.store.search(
+          this.indexKey,
+          vectors[0]!,
+          4,
+          this.minScore,
+          projectId,
+        ),
         signal,
       );
+    } catch {
+      if (signal.aborted) throw signal.reason;
+      throw new RagError();
+    }
+  }
+
+  /**
+   * 4.1 & 4.2: Unified Knowledge Base Retrieval Interface supporting
+   * Query Rewriting, Multi-Query, Dense, BM25, Hybrid RRF, Reranking,
+   * Metadata Filtering, Parent-Child Retrieval, Deduplication, and Relevance Filtering.
+   */
+  async searchKnowledgeBase(
+    input: SearchKnowledgeBaseInput,
+    signal = new AbortController().signal,
+  ): Promise<SearchKnowledgeBaseResult> {
+    const projectId = input.projectId ?? "default";
+    const strategy = input.strategy ?? "hybrid";
+    const topK = input.topK ?? 4;
+    const minScore = input.filters?.minScore ?? this.minScore;
+
+    const rewrittenQueries = rewriteAndExpandQueries(
+      input.query,
+      input.enableQueryRewrite ?? true,
+      input.enableMultiQuery ?? true,
+    );
+
+    if (rewrittenQueries.length === 0) {
+      return {
+        query: input.query,
+        rewrittenQueries: [],
+        strategy,
+        projectId,
+        hits: [],
+        filteredIrrelevantCount: 0,
+        deduplicatedCount: 0,
+        rerankLog: [],
+        emptyReason: "empty_query",
+      };
+    }
+
+    try {
+      const rankedLists: Hit[][] = [];
+
+      // 1. Dense Vector Search across rewritten queries
+      if (strategy === "dense" || strategy === "hybrid") {
+        const denseQueries = rewrittenQueries.slice(0, 2);
+        const vectors = validateVectors(
+          await raceWithAbort(
+            this.embedder.embed(denseQueries, signal),
+            signal,
+          ),
+          denseQueries.length,
+          this.embedder.dimensions,
+        );
+        for (const vec of vectors) {
+          const denseHits = await raceWithAbort(
+            this.store.search(
+              this.indexKey,
+              vec,
+              Math.max(topK * 2, 8),
+              minScore,
+              input.projectId,
+            ),
+            signal,
+          );
+          const filteredDense = applyMetadataFilters(denseHits, {
+            projectId: input.projectId,
+            documentIds: input.documentIds,
+            filters: input.filters,
+          });
+          if (filteredDense.length > 0) rankedLists.push(filteredDense);
+        }
+      }
+
+      // 2. BM25 Sparse Search across candidate project chunks
+      if (strategy === "bm25" || strategy === "hybrid") {
+        const allChunks = await raceWithAbort(
+          this.store.listChunks(this.indexKey, input.projectId),
+          signal,
+        );
+        const filteredChunks = applyMetadataFilters(allChunks, {
+          projectId: input.projectId,
+          documentIds: input.documentIds,
+          filters: input.filters,
+        });
+        const sparseHits = bm25Search(
+          rewrittenQueries,
+          filteredChunks,
+          Math.max(topK * 2, 8),
+        );
+        if (sparseHits.length > 0) rankedLists.push(sparseHits);
+      }
+
+      // 3. Reciprocal Rank Fusion
+      const fusedHits =
+        rankedLists.length === 0
+          ? []
+          : rankedLists.length === 1
+            ? rankedLists[0]!
+            : reciprocalRankFusion(rankedLists, Math.max(topK * 2, 8));
+
+      // 4. Reranking & Relevance Judgment
+      const { hits: relevantHits, filteredIrrelevantCount, rerankLog } =
+        rerankAndFilterHits(rewrittenQueries, fusedHits, {
+          enableReranking: input.enableReranking ?? true,
+          enableRelevanceFilter: input.enableRelevanceFilter ?? true,
+          minScore: Math.min(minScore, 0.2),
+        });
+
+      // 5. Parent-Child Expansion & Deduplication
+      const { hits: finalHits, deduplicatedCount } = deduplicateAndExpandHits(
+        relevantHits,
+        {
+          enableParentChild: input.enableParentChild ?? false,
+          enableDeduplication: input.enableDeduplication ?? true,
+          topK,
+        },
+      );
+
+      return {
+        query: input.query,
+        rewrittenQueries,
+        strategy,
+        projectId,
+        hits: finalHits,
+        filteredIrrelevantCount,
+        deduplicatedCount,
+        rerankLog,
+        ...(finalHits.length === 0
+          ? {
+              emptyReason:
+                filteredIrrelevantCount > 0
+                  ? "no_relevant_evidence_after_filtering"
+                  : "no_matching_chunks",
+            }
+          : {}),
+      };
     } catch {
       if (signal.aborted) throw signal.reason;
       throw new RagError();
