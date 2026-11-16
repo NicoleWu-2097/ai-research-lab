@@ -3,6 +3,7 @@ import { listDocuments, readDocument } from "../mcp/documents.js";
 import type { ResearchTools, ToolEventSink } from "../mcp/client.js";
 import type { ModelProvider } from "../model/types.js";
 import { raceWithAbort } from "../model/deadline.js";
+import { formatIndexKey } from "../config/embedding.js";
 import {
   buildKnowledgeChunks,
   chunkDocument,
@@ -27,7 +28,7 @@ export class RagError extends Error {
   readonly code = "RAG_FAILED";
   constructor() {
     super(
-      "Local retrieval failed. Check RAG health and reingest the configured documents.",
+      "Local retrieval failed. Check RAG health, then run pnpm --filter @research-lab/api rag:reindex.",
     );
   }
 }
@@ -68,7 +69,7 @@ export class RagService implements ResearchTools {
     readonly root: string,
     readonly minScore = 0.4,
   ) {
-    this.indexKey = JSON.stringify([embedder.key, resolve(root)]);
+    this.indexKey = formatIndexKey(embedder.key, resolve(root));
   }
 
   async ingest(signal: AbortSignal) {
@@ -86,20 +87,7 @@ export class RagService implements ResearchTools {
       seen.add(document.sha256);
       chunks.push(...chunkDocument(document));
     }
-    const vectors: number[][] = [];
-    for (let i = 0; i < chunks.length; i += 16) {
-      const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
-      vectors.push(
-        ...validateVectors(
-          await raceWithAbort(
-            this.embedder.embed(texts, "document", signal),
-            signal,
-          ),
-          texts.length,
-          this.embedder.dimensions,
-        ),
-      );
-    }
+    const vectors = await this.embedDocuments(chunks, signal);
     signal.throwIfAborted();
     await this.store.initialize();
     await this.store.replace(this.indexKey, chunks, vectors, signal);
@@ -121,7 +109,7 @@ export class RagService implements ResearchTools {
       const chunks = this.rebuildStoredChunks(document);
       let vectors: number[][];
       try {
-        vectors = await this.embedChunkTexts(chunks, signal);
+        vectors = await this.embedDocuments(chunks, signal);
       } catch {
         if (signal.aborted) throw signal.reason;
         degraded += 1;
@@ -153,7 +141,8 @@ export class RagService implements ResearchTools {
     ).map((chunk) => ({ ...chunk, filename: document.name }));
   }
 
-  private async embedChunkTexts(chunks: Chunk[], signal: AbortSignal) {
+  /** 分批调用嵌入服务；取消与维度校验对所有入口一致。 */
+  private async embedDocuments(chunks: Chunk[], signal: AbortSignal) {
     const vectors: number[][] = [];
     for (let i = 0; i < chunks.length; i += 16) {
       const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
@@ -202,20 +191,7 @@ export class RagService implements ResearchTools {
       filename: name,
       ...(projectId ? { projectId } : {}),
     }));
-    const vectors: number[][] = [];
-    for (let i = 0; i < chunks.length; i += 16) {
-      const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
-      vectors.push(
-        ...validateVectors(
-          await raceWithAbort(
-            this.embedder.embed(texts, "document", signal),
-            signal,
-          ),
-          texts.length,
-          this.embedder.dimensions,
-        ),
-      );
-    }
+    const vectors = await this.embedDocuments(chunks, signal);
     signal.throwIfAborted();
     await this.store.initialize();
     await this.store.append(this.indexKey, chunks, vectors, signal, {
@@ -259,17 +235,7 @@ export class RagService implements ResearchTools {
       embeddingVersion: "chars900-overlap120-v1",
     }).map((c) => ({ ...c, filename: name }));
 
-    const vectors: number[][] = [];
-    for (let i = 0; i < chunks.length; i += 16) {
-      const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
-      vectors.push(
-        ...validateVectors(
-          await this.embedder.embed(texts, "document", signal),
-          texts.length,
-          this.embedder.dimensions,
-        ),
-      );
-    }
+    const vectors = await this.embedDocuments(chunks, signal);
     await this.store.append(this.indexKey, chunks, vectors, signal, {
       id: documentId,
       projectId,
@@ -529,7 +495,14 @@ export class RagService implements ResearchTools {
     emit: ToolEventSink,
   ) {
     await emit("RETRIEVAL_STARTED", { message: "正在检索本地文档片段。" });
-    const hits = (await this.retrieve(question, signal)).map((hit, index) => ({
+    const status = await this.retrieveWithStatus(question, signal);
+    if (status.degraded)
+      await emit("RETRIEVAL_DEGRADED", {
+        strategy: "sparse",
+        reason: status.degradedReason ?? "",
+        message: `嵌入服务不可用，本轮降级为仅使用稀疏检索：${status.degradedReason ?? ""}`,
+      });
+    const hits = status.hits.map((hit, index) => ({
       ...hit,
       chunkId: hit.id,
       id: `RAG:${index + 1}`,

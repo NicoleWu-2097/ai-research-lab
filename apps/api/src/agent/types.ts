@@ -49,10 +49,7 @@ export type TaskCategory =
   | "clarify";
 
 export type EvidenceSufficiency =
-  | "not_required"
-  | "sufficient"
-  | "partial"
-  | "insufficient";
+  "not_required" | "sufficient" | "partial" | "insufficient";
 
 /**
  * 10.1 Observable Execution Events
@@ -64,6 +61,7 @@ export type ObservableEventType =
   | "tool_completed"
   | "tool_failed"
   | "evidence_added"
+  | "RETRIEVAL_DEGRADED"
   | "verification_completed"
   | "artifact_created"
   | "task_completed"

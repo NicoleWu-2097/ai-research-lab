@@ -16,6 +16,7 @@ const uploadProject = "project-a";
 function deterministic(key: string): Embedder {
   return {
     key,
+    model: key,
     dimensions: 3,
     async embed(texts) {
       return texts.map((text) =>
@@ -128,6 +129,7 @@ it("counts a degraded document without aborting the corpus rebuild", async () =>
   const { store, root } = await setUp();
   const failing: Embedder = {
     key: "new-embedding-v2",
+    model: "new-embedding-v2",
     dimensions: 3,
     async embed(texts) {
       if (texts.some((text) => text.includes("MCP")))
