@@ -81,6 +81,7 @@ if (config.HUMAN_ENABLED === "true") {
     "EMBEDDING_MODEL",
     "EMBEDDING_DIMENSIONS",
     "EMBEDDING_BASE_URL",
+    "EMBEDDING_API_KEY",
     "RAG_MIN_SCORE",
     "OLLAMA_BASE_URL",
   ];
