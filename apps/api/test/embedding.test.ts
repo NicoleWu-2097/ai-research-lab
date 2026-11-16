@@ -54,6 +54,8 @@ describe("voyage adapter", () => {
       output_dimension: 2,
       truncation: false,
     });
+    // Voyage 只接受 base64，传 encoding_format 会被 400 拒绝。
+    expect(bodies[0]).not.toHaveProperty("encoding_format");
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(
       "https://voyage.example/v1/embeddings",
     );
@@ -85,6 +87,8 @@ describe("jina adapter", () => {
       dimensions: 2,
       truncate: false,
     });
+    // Jina 用 embedding_type 控制输出编码，传 encoding_format 没有意义。
+    expect(bodies[0]).not.toHaveProperty("encoding_format");
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(
       "https://jina.example/v1/embeddings",
     );

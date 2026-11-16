@@ -2,7 +2,7 @@
 
 日期：2026-11-17。分支：集成分支 `spec/0001-external-embedding`。
 
-环境：Windows，Node v24.19.0，pnpm 11.22.0。本机没有 `ollama`、`psql`、`docker` 命令，也没有 `apps/api/.env`，没有可用的 `EMBEDDING_API_KEY`。
+环境：Windows，Node v24.19.0，pnpm 11.22.0。本机没有 `ollama`、`psql`、`docker` 命令。`.env` 里有可用的 Voyage key，没有可用的 `OPENAI_API_KEY`（该行为空），因此聊天模型未配置。
 
 ## 跑过的命令与结果
 
@@ -50,6 +50,30 @@ pnpm build
 
 结果：3 个包全部成功，`apps/api` 编译通过，`apps/web` 完成 Vite 构建。
 
+## 真实嵌入服务调用
+
+用真实 Voyage key 对 `voyage-4` 发请求，配置为 `EMBEDDING_PROVIDER=voyage`、`EMBEDDING_DIMENSIONS=1024`。查询与文档各调一次，再用 PGlite 建索引并检索：
+
+```json
+{"step":"embed","model":"voyage-4","dimensions":1024,"queryDims":1024,"docDims":1024,"elapsedMs":1722}
+{"step":"ingest","documents":4,"duplicates":0,"chunks":6,"elapsedMs":1073}
+{"step":"retrieve","degraded":false,"degradedReason":null,"hits":3,"top":[{"documentId":"0003-storage-and-protocol-boundaries.md","score":0.5704},{"documentId":"0001-workflow-framework.md","score":0.406},{"documentId":"0004-external-embedding.md","score":0.4052}]}
+{"step":"search","strategy":"hybrid","degraded":false,"hits":4,"emptyReason":null}
+```
+
+确认的事：
+
+- 真实返回维度是 1024，与 `EMBEDDING_DIMENSIONS` 一致，维度校验不触发
+- 查询与文档分别带 `input_type` 提交，服务端接受
+- 全量摄取 `docs/decisions` 成功写入 PGlite，向量入库与索引键写入正常
+- 用「为什么选择 PostgreSQL 与 pgvector」检索，命中 `0003-storage-and-protocol-boundaries.md` 那条 ADR 且分数最高，降级标记为假
+- 统一知识库检索走 hybrid，未降级，命中 4 条
+
+这一轮暴露并修掉的两个真实问题：
+
+- Voyage 只接受 `encoding_format: "base64"`，传 `float` 会被 400 拒绝。改为只对 OpenAI 附加该字段。
+- 未绑定支付方式的 Voyage 账户是 **3 RPM、10K TPM**，摄取时连续请求会 429。改为 429 单独放宽到 5 次重试、等待上限 60 秒，5xx 仍保持 2 次。
+
 ## 没有 Ollama 的启动日志
 
 本机没有安装 Ollama。启动命令在 `apps/api` 目录执行：
@@ -95,10 +119,10 @@ DATABASE_URL=postgresql://research:local-research@localhost:5432/research npx ts
 
 以下项目本次没有执行，不能算作已验收：
 
-- 用真实嵌入服务 key 调用外部接口：本机没有 `EMBEDDING_API_KEY`，也没有网络凭证，所以没有发出真实的 embedding HTTP 请求，没有验证 Voyage 与 Jina 的实际返回维度，也没有验证 429 与 5xx 的退避重试在真实服务上的表现。相关请求构造与重试逻辑由 `test/embedding.test.ts` 用本地 fetch 桩覆盖。
-- 连接真实 PostgreSQL 并写入 pgvector：本机没有 PostgreSQL 服务，`rag:ingest`、`rag:reindex` 的实际写库与重灌摘要输出都没有跑过。基于 PGlite 的 `test/rag.test.ts`、`test/reindex.test.ts` 覆盖了同一条 SQL 路径，但没有覆盖真实服务的连接参数、权限与 pgvector 扩展安装。
-- 完整链路：上传文档、检索、生成带引用的报告与导出。这条链路需要真实嵌入 key 与 PostgreSQL 同时可用，本机无法跑完。
+- 连接真实 PostgreSQL 并写入 pgvector：本机没有 PostgreSQL 服务，`rag:ingest`、`rag:reindex` 的实际写库与重灌摘要输出都没有跑过，重灌摘要只在 PGlite 路径与索引键往返测试上验证。真实服务的连接参数、权限与 pgvector 扩展安装同样未验证。
+- 完整链路：上传文档、检索、生成带引用的报告与导出。这条链路还缺一个可用的聊天模型（`.env` 里 `OPENAI_API_KEY` 为空），本机无法跑完。
 - 用真实旧索引验证重灌摘要：本机没有数据库，`RAG_REINDEX_CONFIGURATION` 事件没有真实输出。索引键的两层解码由 `test/embedding-config.test.ts` 的往返测试与真实两层字符串测试覆盖。
+- 真实服务上的 5xx 退避：只实测了 429 限速分支，5xx 分支由本地 fetch 桩覆盖。
 
 ## 自动测试覆盖的验收点
 

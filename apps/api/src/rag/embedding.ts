@@ -51,18 +51,22 @@ const PROVIDER_LABEL = {
   jina: "Jina AI",
 } as const;
 
+// 免费额度常见的限速是每分钟个位数请求，429 需要比 5xx 更长的等待窗口。
 const MAX_RETRIES = 2;
+const MAX_RATE_LIMIT_RETRIES = 5;
 const BASE_RETRY_DELAY_MS = 500;
 const MAX_RETRY_DELAY_MS = 8_000;
+const MAX_RATE_LIMIT_DELAY_MS = 60_000;
 
-function retryDelayMs(response: Response, attempt: number) {
+function retryDelayMs(response: Response, attempt: number, limit: number) {
   const header = response.headers.get("retry-after");
   if (header !== null) {
     const seconds = Number(header);
     if (Number.isFinite(seconds) && seconds >= 0)
-      return Math.min(seconds * 1000, MAX_RETRY_DELAY_MS);
+      return Math.min(seconds * 1000, limit);
   }
-  return Math.min(BASE_RETRY_DELAY_MS * 2 ** attempt, MAX_RETRY_DELAY_MS);
+  const base = limit === MAX_RATE_LIMIT_DELAY_MS ? 4_000 : BASE_RETRY_DELAY_MS;
+  return Math.min(base * 2 ** attempt, limit);
 }
 
 function wait(ms: number, signal: AbortSignal) {
@@ -100,22 +104,24 @@ export class OpenAICompatibleEmbedder {
 
   private requestBody(texts: string[], kind: EmbeddingKind) {
     const { provider, model, dimensions } = this.config;
-    const body = { model, input: texts, encoding_format: "float" };
+    // encoding_format 只有 OpenAI 接受；Voyage 只认 base64，Jina 用 embedding_type，两家留空即返回浮点数组。
     if (provider === "voyage")
       return {
-        ...body,
+        model,
+        input: texts,
         input_type: kind === "query" ? "query" : "document",
         output_dimension: dimensions,
         truncation: false,
       };
     if (provider === "jina")
       return {
-        ...body,
+        model,
+        input: texts,
         task: kind === "query" ? "retrieval.query" : "retrieval.passage",
         dimensions,
         truncate: false,
       };
-    return body;
+    return { model, input: texts, encoding_format: "float" };
   }
 
   async embed(
@@ -139,14 +145,27 @@ export class OpenAICompatibleEmbedder {
         },
       );
       if (response.ok) return this.parse(response);
+      const rateLimited = response.status === 429;
+      const allowedRetries = rateLimited ? MAX_RATE_LIMIT_RETRIES : MAX_RETRIES;
       if (
-        !(response.status === 429 || response.status >= 500) ||
-        attempt >= MAX_RETRIES
-      )
+        !(rateLimited || response.status >= 500) ||
+        attempt >= allowedRetries
+      ) {
+        const detail = (await response.text())
+          .slice(0, 300)
+          .replace(/\s+/g, " ");
         throw new Error(
-          `Embedding request failed with status ${response.status}.`,
+          `Embedding request failed with status ${response.status}${detail ? `: ${detail}` : ""}`,
         );
-      await wait(retryDelayMs(response, attempt), signal);
+      }
+      await wait(
+        retryDelayMs(
+          response,
+          attempt,
+          rateLimited ? MAX_RATE_LIMIT_DELAY_MS : MAX_RETRY_DELAY_MS,
+        ),
+        signal,
+      );
     }
   }
 
