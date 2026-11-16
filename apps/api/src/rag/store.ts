@@ -221,6 +221,41 @@ export class VectorStore {
       updatedAt: rows[0].updated_at,
     };
   }
+  async listDocuments(): Promise<StoredDocument[]> {
+    const { rows } = await this.db.query<{
+      project_id: string;
+      id: string;
+      name: string;
+      content: string;
+      sha256: string;
+      embedding_key: string;
+      updated_at: string;
+    }>(
+      "SELECT project_id, id, name, content, sha256, embedding_key, updated_at::text FROM rag_documents ORDER BY project_id, id",
+    );
+    return rows.map((row) => ({
+      projectId: row.project_id,
+      id: row.id,
+      name: row.name,
+      content: row.content,
+      sha256: row.sha256,
+      embeddingKey: row.embedding_key,
+      updatedAt: row.updated_at,
+    }));
+  }
+  async currentIndex(): Promise<{
+    embeddingKey: string;
+    indexedAt: string;
+  } | null> {
+    const { rows } = await this.db.query<{
+      embedding_key: string;
+      indexed_at: string;
+    }>("SELECT embedding_key, indexed_at::text FROM rag_index LIMIT 1");
+    const row = rows[0];
+    return row
+      ? { embeddingKey: row.embedding_key, indexedAt: row.indexed_at }
+      : null;
+  }
   async health(key: string) {
     const { rows } = await this.db.query<{
       compatible: boolean;
