@@ -4,7 +4,48 @@ import { z } from "zod";
 import { createDeadline, raceWithAbort } from "../model/deadline.js";
 import type { RagService } from "./service.js";
 
-export function ragRoutes(rag: RagService | null, timeoutMs: number) {
+const PROBE_TEXT = "health check";
+
+async function probeEmbedding(
+  rag: RagService,
+  model: string | null,
+  timeoutMs: number,
+  parentSignal: AbortSignal,
+) {
+  const expectedDimensions = rag.embedder.dimensions;
+  const deadline = createDeadline(parentSignal, timeoutMs);
+  try {
+    const [vector] = await raceWithAbort(
+      rag.embedder.embed([PROBE_TEXT], "query", deadline.signal),
+      deadline.signal,
+    );
+    const actualDimensions = vector?.length ?? 0;
+    if (actualDimensions !== expectedDimensions)
+      return {
+        ok: false,
+        model,
+        expectedDimensions,
+        actualDimensions,
+        error: `Embedding dimensions mismatch: expected ${expectedDimensions}, received ${actualDimensions}.`,
+      };
+    return { ok: true, model, expectedDimensions, actualDimensions };
+  } catch (error) {
+    return {
+      ok: false,
+      model,
+      expectedDimensions,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    deadline.dispose();
+  }
+}
+
+export function ragRoutes(
+  rag: RagService | null,
+  timeoutMs: number,
+  embeddingModel: string | null = null,
+) {
   const routes = new Hono();
   routes.post("/upload", bodyLimit({ maxSize: 32000 }), async (c) => {
     const origin = c.req.header("origin");
@@ -70,8 +111,21 @@ export function ragRoutes(rag: RagService | null, timeoutMs: number) {
     if (!rag) return context.json({ status: "disabled" }, 503);
     try {
       const health = await rag.health();
+      const probe =
+        context.req.query("probe") === "true"
+          ? await probeEmbedding(
+              rag,
+              embeddingModel,
+              timeoutMs,
+              context.req.raw.signal,
+            )
+          : undefined;
       return context.json(
-        { status: health.compatible ? "ready" : "needs_ingestion", ...health },
+        {
+          status: health.compatible ? "ready" : "needs_ingestion",
+          ...health,
+          ...(probe ? { probe } : {}),
+        },
         health.compatible ? 200 : 503,
       );
     } catch {
