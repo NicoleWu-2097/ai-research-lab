@@ -46,6 +46,7 @@ export function createApp(
   loop = false,
   human: HumanService | null = null,
   web: LocalRetriever | null = null,
+  embeddingModel: string | null = null,
 ) {
   const app = new Hono();
   if (human) {
@@ -68,7 +69,7 @@ export function createApp(
       web,
     ),
   );
-  app.route("/api/rag", ragRoutes(rag, timeoutMs));
+  app.route("/api/rag", ragRoutes(rag, timeoutMs, embeddingModel));
   const agentRuntime = new AtlasAgentRuntime(provider, rag, web, {
     timeoutMs,
   });

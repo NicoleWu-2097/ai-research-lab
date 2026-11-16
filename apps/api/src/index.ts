@@ -12,11 +12,14 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import { createApp } from "./app.js";
+import { assertNoOllama } from "./config/no-ollama.js";
+import { readEmbeddingInfo } from "./config/embedding.js";
 import { createModelProvider, readModelConfig } from "./model/config.js";
 import { McpDocumentTools } from "./mcp/client.js";
 import { createRag } from "./rag/config.js";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
+assertNoOllama(process.env);
 
 const config = z
   .object({
@@ -38,6 +41,7 @@ const config = z
   .parse(process.env);
 
 const modelConfig = readModelConfig(process.env);
+const embeddingInfo = readEmbeddingInfo(process.env);
 const provider = modelConfig ? createModelProvider(modelConfig) : null;
 const documentRoot = config.MCP_DOCUMENT_ROOT
   ? resolve(config.MCP_DOCUMENT_ROOT)
@@ -125,6 +129,7 @@ const app = createApp(
     config.MULTI_AGENT_ENABLED === "true",
   human,
   web,
+  embeddingInfo?.model ?? null,
 );
 
 const server = serve({
@@ -139,6 +144,9 @@ console.info(
     port: config.PORT,
     modelProvider: provider?.provider ?? "unconfigured",
     model: provider?.model ?? null,
+    embeddingProvider: embeddingInfo?.provider ?? null,
+    embeddingModel: embeddingInfo?.model ?? null,
+    embeddingBaseUrl: embeddingInfo?.baseUrl ?? null,
     mcpEnabled: tools !== null,
     ragEnabled: rag !== null,
     multiAgentEnabled:
