@@ -1,6 +1,6 @@
 # 验收记录：外部嵌入服务与无 Ollama 运行
 
-日期：2026-11-17。分支：`spec/0001-fix`（基于集成分支 `spec/0001-external-embedding`，HEAD `db77412`）。
+日期：2026-11-17。分支：集成分支 `spec/0001-external-embedding`。
 
 环境：Windows，Node v24.19.0，pnpm 11.22.0。本机没有 `ollama`、`psql`、`docker` 命令，也没有 `apps/api/.env`，没有可用的 `EMBEDDING_API_KEY`。
 
