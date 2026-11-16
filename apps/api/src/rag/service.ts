@@ -64,7 +64,10 @@ export class RagService implements ResearchTools {
       const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
       vectors.push(
         ...validateVectors(
-          await raceWithAbort(this.embedder.embed(texts, signal), signal),
+          await raceWithAbort(
+            this.embedder.embed(texts, "document", signal),
+            signal,
+          ),
           texts.length,
           this.embedder.dimensions,
         ),
@@ -112,7 +115,10 @@ export class RagService implements ResearchTools {
       const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
       vectors.push(
         ...validateVectors(
-          await this.embedder.embed(texts, signal),
+          await raceWithAbort(
+            this.embedder.embed(texts, "document", signal),
+            signal,
+          ),
           texts.length,
           this.embedder.dimensions,
         ),
@@ -166,7 +172,7 @@ export class RagService implements ResearchTools {
       const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
       vectors.push(
         ...validateVectors(
-          await this.embedder.embed(texts, signal),
+          await this.embedder.embed(texts, "document", signal),
           texts.length,
           this.embedder.dimensions,
         ),
@@ -200,7 +206,10 @@ export class RagService implements ResearchTools {
   ): Promise<Hit[]> {
     try {
       const vectors = validateVectors(
-        await raceWithAbort(this.embedder.embed([question], signal), signal),
+        await raceWithAbort(
+          this.embedder.embed([question], "query", signal),
+          signal,
+        ),
         1,
         this.embedder.dimensions,
       );
@@ -263,7 +272,7 @@ export class RagService implements ResearchTools {
         const denseQueries = rewrittenQueries.slice(0, 2);
         const vectors = validateVectors(
           await raceWithAbort(
-            this.embedder.embed(denseQueries, signal),
+            this.embedder.embed(denseQueries, "query", signal),
             signal,
           ),
           denseQueries.length,
