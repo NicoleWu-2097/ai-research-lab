@@ -372,14 +372,15 @@ it("keeps RAG disabled by default and validates retrieval input", async () => {
   ).toBe(400);
 });
 
-it("validates embedding configuration independently from generation", () => {
-  expect(() =>
-    createEmbedder({
-      EMBEDDING_PROVIDER: "openai",
-      EMBEDDING_MODEL: "test",
-      EMBEDDING_DIMENSIONS: "3",
-    }),
-  ).toThrow();
+it("validates embedding configuration independently from generation", async () => {
+  const withoutKey = createEmbedder({
+    EMBEDDING_PROVIDER: "openai",
+    EMBEDDING_MODEL: "test",
+    EMBEDDING_DIMENSIONS: "3",
+  });
+  await expect(
+    withoutKey.embed(["probe"], "query", new AbortController().signal),
+  ).rejects.toThrow(/OPENAI_API_KEY/);
   expect(
     createEmbedder({
       EMBEDDING_PROVIDER: "ollama",
@@ -443,6 +444,123 @@ it("rejects unsupported upload formats and foreign origins before indexing", asy
       })
     ).status,
   ).toBe(403);
+});
+it("probes the embedding service only when the health check asks for it", async () => {
+  const calls: { texts: string[]; kind: string }[] = [];
+  const probed = new RagService(
+    store,
+    {
+      key: "deterministic-v1",
+      dimensions: 3,
+      async embed(texts, kind) {
+        calls.push({ texts, kind });
+        return texts.map(() => [1, 0, 0]);
+      },
+    },
+    root,
+  );
+  const app = createApp(
+    model,
+    10000,
+    null,
+    probed,
+    false,
+    false,
+    null,
+    false,
+    null,
+    null,
+    "voyage-4",
+  );
+
+  const plain = await app.request("/api/rag/health");
+  expect(plain.status).toBe(200);
+  expect((await plain.json()).probe).toBeUndefined();
+  expect(calls).toHaveLength(0);
+
+  const response = await app.request("/api/rag/health?probe=true");
+  expect(response.status).toBe(200);
+  expect((await response.json()).probe).toMatchObject({
+    ok: true,
+    model: "voyage-4",
+    expectedDimensions: 3,
+    actualDimensions: 3,
+  });
+  expect(calls).toHaveLength(1);
+  expect(calls[0]!.kind).toBe("query");
+  expect(calls[0]!.texts.length).toBeGreaterThan(0);
+});
+it("reports a probed dimension mismatch with both dimensions", async () => {
+  const app = createApp(
+    model,
+    10000,
+    null,
+    new RagService(
+      store,
+      {
+        key: "deterministic-v1",
+        dimensions: 3,
+        async embed() {
+          return [[1, 0]];
+        },
+      },
+      root,
+    ),
+    false,
+    false,
+    null,
+    false,
+    null,
+    null,
+    "voyage-4",
+  );
+
+  const response = await app.request("/api/rag/health?probe=true");
+  expect(response.status).toBe(200);
+  const { probe } = await response.json();
+  expect(probe).toMatchObject({
+    ok: false,
+    model: "voyage-4",
+    expectedDimensions: 3,
+    actualDimensions: 2,
+  });
+  expect(probe.error).toContain("expected 3");
+  expect(probe.error).toContain("received 2");
+});
+it("reports a failed probe without failing the health check", async () => {
+  const app = createApp(
+    model,
+    10000,
+    null,
+    new RagService(
+      store,
+      {
+        ...embedding,
+        async embed() {
+          throw new Error("Embedding request failed with status 401.");
+        },
+      },
+      root,
+    ),
+    false,
+    false,
+    null,
+    false,
+    null,
+    null,
+    "voyage-4",
+  );
+
+  const response = await app.request("/api/rag/health?probe=true");
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body.status).toBe("ready");
+  expect(body.probe).toMatchObject({
+    ok: false,
+    model: "voyage-4",
+    expectedDimensions: 3,
+  });
+  expect(body.probe.error).toBe("Embedding request failed with status 401.");
 });
 it("explains an unavailable embedding service without exposing SDK details", async () => {
   const unavailable = new RagService(
