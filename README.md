@@ -4,14 +4,14 @@ M11 now uses an Ink terminal client with streamed report previews, approval at t
 
 ## Run locally
 
-Requires Node 24, pnpm 11.22.0, and PostgreSQL for project persistence. Configure `apps/api/.env` with `HUMAN_ENABLED=true`, database settings and your model API key.
+Requires Node 24, pnpm 11.22.0, and PostgreSQL for project persistence. Configure `apps/api/.env` with `HUMAN_ENABLED=true`, database settings, your model API key and `EMBEDDING_API_KEY` for the embedding service.
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-In another terminal run `pnpm cli`. Enter a question to create a project; after completion, enter another message to revise it. Use `/upload path/to/notes.md` to index a document. RAG also requires its embedding service.
+In another terminal run `pnpm cli`. Enter a question to create a project; after completion, enter another message to revise it. Use `/upload path/to/notes.md` to index a document. RAG uses an external embedding service by default (Voyage); fill `EMBEDDING_API_KEY` in `.env`. Ollama remains an optional embedding provider.
 
 The API defaults to <http://localhost:3001>. The legacy browser client can be started separately with `pnpm dev:web`.
 
