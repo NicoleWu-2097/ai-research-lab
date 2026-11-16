@@ -168,6 +168,109 @@ it("rejects incompatible embedding configurations and cancelled requests", async
   );
 });
 
+it("degrades to sparse hits with a reason when the embedding service fails", async () => {
+  const unavailable = new RagService(
+    store,
+    {
+      ...embedding,
+      async embed() {
+        throw new Error("connect ECONNREFUSED 127.0.0.1:11434");
+      },
+    },
+    root,
+    0.5,
+  );
+  const result = await unavailable.retrieveWithStatus("PostgreSQL", signal);
+  expect(result.degraded).toBe(true);
+  expect(result.degradedReason).toContain("ECONNREFUSED");
+  expect(result.hits.map((hit) => hit.documentId)).toContain("storage.md");
+  const delegated = await unavailable.retrieve("PostgreSQL", signal);
+  expect(delegated.map((hit) => hit.id)).toEqual(
+    result.hits.map((hit) => hit.id),
+  );
+});
+
+it("keeps the degraded marker when sparse retrieval finds nothing", async () => {
+  const unavailable = new RagService(
+    store,
+    {
+      ...embedding,
+      async embed() {
+        throw new Error("embedding service offline");
+      },
+    },
+    root,
+  );
+  const result = await unavailable.retrieveWithStatus("kangaroo", signal);
+  expect(result.hits).toEqual([]);
+  expect(result.degraded).toBe(true);
+  expect(result.degradedReason).toContain("offline");
+});
+
+it("degrades unified knowledge base retrieval without fabricating hits", async () => {
+  const unavailable = new RagService(
+    store,
+    {
+      ...embedding,
+      async embed() {
+        throw new Error("embedding service offline");
+      },
+    },
+    root,
+  );
+  const hit = await unavailable.searchKnowledgeBase(
+    { query: "PostgreSQL" },
+    signal,
+  );
+  expect(hit.degraded).toBe(true);
+  expect(hit.degradedReason).toContain("offline");
+  expect(hit.hits.some((h) => h.documentId === "storage.md")).toBe(true);
+  const empty = await unavailable.searchKnowledgeBase(
+    { query: "kangaroo" },
+    signal,
+  );
+  expect(empty.hits).toEqual([]);
+  expect(empty.degraded).toBe(true);
+});
+
+it("reports no degradation when the embedding service responds", async () => {
+  const single = await rag.retrieveWithStatus("PostgreSQL", signal);
+  expect(single.degraded).toBe(false);
+  expect(single.degradedReason).toBeUndefined();
+  const unified = await rag.searchKnowledgeBase(
+    { query: "PostgreSQL" },
+    signal,
+  );
+  expect(unified.degraded).toBe(false);
+  expect(unified.degradedReason).toBeUndefined();
+});
+
+it("still throws a retrieval error when the vector store fails", async () => {
+  const deadDb = new PGlite({ extensions: { vector } });
+  const deadStore = new VectorStore(deadDb);
+  await deadDb.close();
+  const growing = new RagService(deadStore, embedding, root);
+  await expect(growing.retrieve("PostgreSQL", signal)).rejects.toMatchObject({
+    code: "RAG_FAILED",
+  });
+  await expect(
+    growing.searchKnowledgeBase({ query: "PostgreSQL" }, signal),
+  ).rejects.toMatchObject({ code: "RAG_FAILED" });
+  const degrading = new RagService(
+    deadStore,
+    {
+      ...embedding,
+      async embed() {
+        throw new Error("embedding service offline");
+      },
+    },
+    root,
+  );
+  await expect(
+    degrading.retrieveWithStatus("PostgreSQL", signal),
+  ).rejects.toMatchObject({ code: "RAG_FAILED" });
+});
+
 it("returns HTTP hits and streams only mapped citations to completion", async () => {
   const app = createApp(model, 10000, null, rag);
   expect((await app.request("/api/rag/health")).status).toBe(200);

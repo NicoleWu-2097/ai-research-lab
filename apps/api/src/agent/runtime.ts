@@ -175,6 +175,8 @@ export class AtlasAgentRuntime {
         }>;
         evidenceIds: string[];
         filteredIrrelevantCount: number;
+        degraded: boolean;
+        degradedReason?: string;
         emptyReason?: string;
       }
     > = {
@@ -199,6 +201,8 @@ export class AtlasAgentRuntime {
         ),
         evidenceIds: z.array(z.string()),
         filteredIrrelevantCount: z.number().int(),
+        degraded: z.boolean(),
+        degradedReason: z.string().optional(),
         emptyReason: z.string().optional(),
       }),
       permission: "read",
@@ -215,6 +219,7 @@ export class AtlasAgentRuntime {
               hits: [],
               evidenceIds: [],
               filteredIrrelevantCount: 0,
+              degraded: false,
               emptyReason: "rag_disabled",
             },
           };
@@ -272,8 +277,20 @@ export class AtlasAgentRuntime {
             })),
             evidenceIds: evidences.map((e) => e.id),
             filteredIrrelevantCount: result.filteredIrrelevantCount,
+            degraded: result.degraded,
+            ...(result.degradedReason
+              ? { degradedReason: result.degradedReason }
+              : {}),
             ...(result.emptyReason ? { emptyReason: result.emptyReason } : {}),
           },
+          ...(result.degraded
+            ? {
+                metadata: {
+                  degraded: true,
+                  degradedReason: result.degradedReason,
+                },
+              }
+            : {}),
         };
       },
     };
@@ -1141,6 +1158,8 @@ export class AtlasAgentRuntime {
             }>;
             evidenceIds: string[];
             filteredIrrelevantCount: number;
+            degraded: boolean;
+            degradedReason?: string;
             emptyReason?: string;
           }>(
             "search_knowledge_base",
@@ -1168,41 +1187,12 @@ export class AtlasAgentRuntime {
                 }),
           });
 
-          if (!kbRes.success && this.config.enableSelfRecovery) {
-            // Self-recovery when Ollama Embedding is unavailable: try BM25 sparse search!
-            taskState.status = "recovering";
-            const bm25Res = await this.toolRegistry.execute<{
-              hits: Array<{
-                id: string;
-                documentId: string;
-                content: string;
-                score: number;
-              }>;
-              evidenceIds: string[];
-              filteredIrrelevantCount: number;
-            }>(
-              "search_knowledge_base",
-              {
-                query: plannedAction.query ?? activeRequest.resolvedGoal,
-                projectId,
-                topK: 4,
-                strategy: "bm25",
-              },
-              toolContext,
-            );
-            this.traceCollector.recordRecovery(trace.traceId, {
-              step: "search_knowledge_base",
-              failureCategory: "retrieval_error",
-              action: "fallback_to_bm25_sparse_search",
-              succeeded: bm25Res.success,
-              message: bm25Res.success
-                ? "Ollama Embedding 不可用，已自动切换为 BM25 稀疏检索恢复。"
-                : "BM25 备用检索亦未命中，继续使用其他可用工具或模型知识。",
-            });
-          } else if (kbRes.success) {
+          if (kbRes.success) {
             workingMemory.toolOutputs.push({
               tool: "search_knowledge_base",
-              summary: `Retrieved ${kbRes.data.hits.length} relevant hits (filtered ${kbRes.data.filteredIrrelevantCount} irrelevant chunks).`,
+              summary: kbRes.data.degraded
+                ? `Retrieved ${kbRes.data.hits.length} relevant hits via sparse retrieval (embedding service unavailable: ${kbRes.data.degradedReason ?? "unknown reason"}).`
+                : `Retrieved ${kbRes.data.hits.length} relevant hits (filtered ${kbRes.data.filteredIrrelevantCount} irrelevant chunks).`,
               timestamp: new Date().toISOString(),
             });
           }

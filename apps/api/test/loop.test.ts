@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import { runResearchLoop } from "../src/research/loop.js";
+import { appendRetrievalNotice } from "../src/research/report.js";
 import { ResearchBudget } from "../src/research/budget.js";
 import { ModelError, type ModelProvider } from "../src/model/types.js";
 import { chunkDocument } from "../src/rag/chunks.js";
@@ -342,6 +343,61 @@ it("falls back to retrieved excerpts if the final synthesis also fails", async (
   expect(report).toContain("one data service");
   expect(report).not.toContain("offline");
   expect(budget.calls).toBe(2);
+});
+
+it("records degradation and appends a retrieval notice when local retrieval degrades", async () => {
+  const test = fixture([plan(), analysis()]);
+  const events: { type: string; [key: string]: unknown }[] = [];
+  const degradedLocal = {
+    retrieve: vi.fn(async () => {
+      throw new Error("dense retrieval must not run twice");
+    }),
+    retrieveWithStatus: vi.fn(async () => ({
+      hits: [hit("a")],
+      degraded: true,
+      degradedReason: "嵌入服务调用失败：服务离线",
+    })),
+  };
+  const report = await runResearchLoop(
+    "first question",
+    test.provider,
+    new AbortController().signal,
+    async () => {},
+    degradedLocal,
+    null,
+    async (type, data) => {
+      events.push({ type, ...data });
+    },
+    test.agents,
+  );
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "RETRIEVAL_DEGRADED",
+      strategy: "sparse",
+      reason: "嵌入服务调用失败：服务离线",
+    }),
+  );
+  expect(degradedLocal.retrieve).not.toHaveBeenCalled();
+  expect(report).toContain("## 检索说明");
+  expect(report).toContain("本轮仅使用稀疏检索");
+  expect(report).toContain("服务离线");
+});
+
+it("keeps reports free of degradation markers on healthy retrieval", async () => {
+  const test = fixture([plan(), analysis()]);
+  const report = await test.run();
+  expect(test.events).not.toContainEqual(
+    expect.objectContaining({ type: "RETRIEVAL_DEGRADED" }),
+  );
+  expect(report).not.toContain("## 检索说明");
+});
+
+it("appends the retrieval notice once", () => {
+  const once = appendRetrievalNotice("报告正文", "嵌入服务调用失败：服务离线");
+  expect(once).toContain("## 检索说明");
+  expect(once.match(/## 检索说明/g)).toHaveLength(1);
+  expect(appendRetrievalNotice(once, "嵌入服务调用失败：服务离线")).toBe(once);
+  expect(appendRetrievalNotice("报告正文", undefined)).toBe("报告正文");
 });
 
 it("lists actual web source URLs in the final report", async () => {
