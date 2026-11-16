@@ -37,7 +37,7 @@ export function validateVectors(
 
 type CompatibleProvider = "openai" | "voyage" | "jina";
 
-const DEFAULT_BASE_URL = {
+export const DEFAULT_EMBEDDING_BASE_URL = {
   ollama: "http://localhost:11434",
   openai: "https://api.openai.com/v1",
   voyage: "https://api.voyageai.com/v1",
@@ -202,7 +202,8 @@ export function createEmbedder(
     })
     .parse(env);
   const provider = config.EMBEDDING_PROVIDER;
-  const baseUrl = config.EMBEDDING_BASE_URL ?? DEFAULT_BASE_URL[provider];
+  const baseUrl =
+    config.EMBEDDING_BASE_URL ?? DEFAULT_EMBEDDING_BASE_URL[provider];
   const apiKeyName =
     provider === "openai" ? "OPENAI_API_KEY" : "EMBEDDING_API_KEY";
   const apiKey =
@@ -211,10 +212,11 @@ export function createEmbedder(
       : provider === "openai"
         ? config.OPENAI_API_KEY
         : config.EMBEDDING_API_KEY;
-  if (provider !== "ollama" && !apiKey)
-    throw new Error(
-      `${PROVIDER_LABEL[provider]} embeddings require ${apiKeyName}.`,
-    );
+  // 缺少密钥不阻塞启动，改为在请求时报错，由检索层降级并留下说明。
+  const missingKey =
+    provider !== "ollama" && !apiKey
+      ? `${PROVIDER_LABEL[provider]} embeddings require ${apiKeyName}.`
+      : null;
   const transport =
     provider === "ollama"
       ? null
@@ -222,7 +224,7 @@ export function createEmbedder(
           {
             provider,
             baseUrl,
-            apiKey: apiKey!,
+            apiKey: apiKey ?? "",
             model: config.EMBEDDING_MODEL,
             dimensions: config.EMBEDDING_DIMENSIONS,
           },
@@ -238,6 +240,7 @@ export function createEmbedder(
     ]),
     dimensions: config.EMBEDDING_DIMENSIONS,
     async embed(texts, kind, signal) {
+      if (missingKey) throw new Error(missingKey);
       const vectors = transport
         ? await transport.embed(texts, kind, signal)
         : await embedWithOllama(

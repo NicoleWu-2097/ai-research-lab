@@ -136,17 +136,18 @@ describe("embedder configuration", () => {
       new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get("authorization"),
     ).toBe("Bearer voyage-key");
     expect(embedder.key).toContain("voyage-4");
-    expect(() =>
-      createEmbedder(
-        {
-          EMBEDDING_PROVIDER: "jina",
-          EMBEDDING_MODEL: "jina-embeddings-v4",
-          EMBEDDING_DIMENSIONS: "1024",
-          EMBEDDING_API_KEY: "",
-        },
-        fetchImpl,
-      ),
-    ).toThrow(/Jina AI embeddings require EMBEDDING_API_KEY/);
+    const withoutKey = createEmbedder(
+      {
+        EMBEDDING_PROVIDER: "jina",
+        EMBEDDING_MODEL: "jina-embeddings-v4",
+        EMBEDDING_DIMENSIONS: "1024",
+        EMBEDDING_API_KEY: "",
+      },
+      fetchImpl,
+    );
+    await expect(
+      withoutKey.embed(["hello"], "query", new AbortController().signal),
+    ).rejects.toThrow(/Jina AI embeddings require EMBEDDING_API_KEY/);
   });
 });
 

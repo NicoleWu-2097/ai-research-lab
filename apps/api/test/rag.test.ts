@@ -269,14 +269,15 @@ it("keeps RAG disabled by default and validates retrieval input", async () => {
   ).toBe(400);
 });
 
-it("validates embedding configuration independently from generation", () => {
-  expect(() =>
-    createEmbedder({
-      EMBEDDING_PROVIDER: "openai",
-      EMBEDDING_MODEL: "test",
-      EMBEDDING_DIMENSIONS: "3",
-    }),
-  ).toThrow();
+it("validates embedding configuration independently from generation", async () => {
+  const withoutKey = createEmbedder({
+    EMBEDDING_PROVIDER: "openai",
+    EMBEDDING_MODEL: "test",
+    EMBEDDING_DIMENSIONS: "3",
+  });
+  await expect(
+    withoutKey.embed(["probe"], "query", new AbortController().signal),
+  ).rejects.toThrow(/OPENAI_API_KEY/);
   expect(
     createEmbedder({
       EMBEDDING_PROVIDER: "ollama",
