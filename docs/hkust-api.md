@@ -6,6 +6,6 @@
 
 新增 OPENAI_API_STYLE=chat-completions 和 OPENAI_AUTH_HEADER=api-key。普通官方 OpenAI 仍可使用 responses / bearer。网关按截图使用非流式请求，应用收到完整文本后作为一个输出片段展示；不要求学校网关支持 SSE。结构化步骤使用 JSON Schema 提示及本地 Zod 校验，不假定该网关支持 response_format。
 
-截图只证明聊天接口，尚未证明 embedding 接口；RAG 仍使用原本的 Ollama embeddinggemma。若要完全移除 Ollama，需要学校提供可用 embedding 模型及 endpoint，再迁移并重新生成索引。聊天模型切换不要求重新生成现有向量。
+截图只证明聊天接口，没有证明 embedding 接口。嵌入默认接外部嵌入服务（Voyage），填写 `EMBEDDING_API_KEY` 即可使用；Ollama 是可选路径。更换嵌入配置后需要重灌全部语料，命令为 `rag:reindex`；聊天模型切换不要求重新生成现有向量。
 
 密钥留空时启动会提示配置错误，这是等待用户填写的预期状态。配置变化后旧任务不能直接恢复，请创建新任务。密钥仅放在 API 的 .env，不放前端环境变量或请求 URL。本轮没有密钥，因此仅完成模拟 HTTP 协议测试，未向学校网关发真实请求。
