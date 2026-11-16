@@ -32,6 +32,19 @@ export class RagError extends Error {
   }
 }
 
+/** 检索结果带降级标记；degraded 为真时本轮只使用了稀疏检索。 */
+export interface RetrievalStatus {
+  hits: Hit[];
+  degraded: boolean;
+  degradedReason?: string;
+}
+
+/** 降级原因取嵌入服务返回的错误信息，报告与事件据此说明证据来源。 */
+function embeddingFailureReason(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return `嵌入服务调用失败：${detail}`;
+}
+
 export class RagService implements ResearchTools {
   readonly evidenceOnly = true;
   private readonly indexKey: string;
@@ -199,35 +212,85 @@ export class RagService implements ResearchTools {
     return this.store.health(this.indexKey);
   }
 
+  async retrieveWithStatus(
+    question: string,
+    signal: AbortSignal,
+    projectId?: string,
+  ): Promise<RetrievalStatus> {
+    const queries = [question];
+    let vectors: number[][] | undefined;
+    let degradedReason: string | undefined;
+    try {
+      vectors = await this.embedQueries(queries, signal);
+    } catch (error) {
+      if (signal.aborted) throw signal.reason;
+      degradedReason = embeddingFailureReason(error);
+    }
+    try {
+      if (vectors) {
+        signal.throwIfAborted();
+        return {
+          hits: await raceWithAbort(
+            this.store.search(
+              this.indexKey,
+              vectors[0]!,
+              4,
+              this.minScore,
+              projectId,
+            ),
+            signal,
+          ),
+          degraded: false,
+        };
+      }
+      return {
+        hits: await this.sparseHits(queries, 4, projectId, signal),
+        degraded: true,
+        ...(degradedReason ? { degradedReason } : {}),
+      };
+    } catch {
+      if (signal.aborted) throw signal.reason;
+      throw new RagError();
+    }
+  }
+
   async retrieve(
     question: string,
     signal: AbortSignal,
     projectId?: string,
   ): Promise<Hit[]> {
-    try {
-      const vectors = validateVectors(
-        await raceWithAbort(
-          this.embedder.embed([question], "query", signal),
-          signal,
-        ),
-        1,
-        this.embedder.dimensions,
-      );
-      signal.throwIfAborted();
-      return await raceWithAbort(
-        this.store.search(
-          this.indexKey,
-          vectors[0]!,
-          4,
-          this.minScore,
-          projectId,
-        ),
+    return (await this.retrieveWithStatus(question, signal, projectId)).hits;
+  }
+
+  private async embedQueries(queries: string[], signal: AbortSignal) {
+    return validateVectors(
+      await raceWithAbort(
+        this.embedder.embed(queries, "query", signal),
         signal,
-      );
-    } catch {
-      if (signal.aborted) throw signal.reason;
-      throw new RagError();
-    }
+      ),
+      queries.length,
+      this.embedder.dimensions,
+    );
+  }
+
+  /** 嵌入服务不可用时的稀疏检索；不计算向量，只按关键词匹配候选片段。 */
+  private async sparseHits(
+    queries: string[],
+    limit: number,
+    projectId: string | undefined,
+    signal: AbortSignal,
+  ): Promise<Hit[]> {
+    const chunks = await raceWithAbort(
+      this.store.listChunks(this.indexKey, projectId),
+      signal,
+    );
+    const candidates = bm25Search(queries, chunks, Math.max(limit * 2, 8));
+    const { hits } = rerankAndFilterHits(queries, candidates, {
+      enableReranking: true,
+      enableRelevanceFilter: true,
+      minScore: Math.min(this.minScore, 0.2),
+    });
+    return hits.slice(0, limit);
   }
 
   /**
@@ -260,24 +323,27 @@ export class RagService implements ResearchTools {
         filteredIrrelevantCount: 0,
         deduplicatedCount: 0,
         rerankLog: [],
+        degraded: false,
         emptyReason: "empty_query",
       };
+    }
+
+    let vectors: number[][] | undefined;
+    let degradedReason: string | undefined;
+    if (strategy === "dense" || strategy === "hybrid") {
+      try {
+        vectors = await this.embedQueries(rewrittenQueries.slice(0, 2), signal);
+      } catch (error) {
+        if (signal.aborted) throw signal.reason;
+        degradedReason = embeddingFailureReason(error);
+      }
     }
 
     try {
       const rankedLists: Hit[][] = [];
 
       // 1. Dense Vector Search across rewritten queries
-      if (strategy === "dense" || strategy === "hybrid") {
-        const denseQueries = rewrittenQueries.slice(0, 2);
-        const vectors = validateVectors(
-          await raceWithAbort(
-            this.embedder.embed(denseQueries, "query", signal),
-            signal,
-          ),
-          denseQueries.length,
-          this.embedder.dimensions,
-        );
+      if (vectors) {
         for (const vec of vectors) {
           const denseHits = await raceWithAbort(
             this.store.search(
@@ -299,7 +365,7 @@ export class RagService implements ResearchTools {
       }
 
       // 2. BM25 Sparse Search across candidate project chunks
-      if (strategy === "bm25" || strategy === "hybrid") {
+      if (strategy === "bm25" || strategy === "hybrid" || degradedReason) {
         const allChunks = await raceWithAbort(
           this.store.listChunks(this.indexKey, input.projectId),
           signal,
@@ -352,6 +418,8 @@ export class RagService implements ResearchTools {
         filteredIrrelevantCount,
         deduplicatedCount,
         rerankLog,
+        degraded: !!degradedReason,
+        ...(degradedReason ? { degradedReason } : {}),
         ...(finalHits.length === 0
           ? {
               emptyReason:

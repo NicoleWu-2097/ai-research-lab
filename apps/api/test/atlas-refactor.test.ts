@@ -419,7 +419,7 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
     expect(g1.output).toContain("重试成功后生成的有效分析结果");
     expect(g1.trace.recoveries.some((r) => r.succeeded)).toBe(true);
 
-    // G2: Ollama Embedding service down -> falls back to BM25 sparse search on existing index
+    // G2: Ollama Embedding service down -> service layer degrades to BM25 sparse search on existing index
     const brokenEmbedderRag = new RagService(
       vectorStore,
       {
@@ -443,14 +443,20 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
       message: "研究 Atlas 的 PostgreSQL 存储设计",
     });
     expect(g2.taskState.status).toBe("completed");
+    const searchEvent = g2.trace.events.find(
+      (e) =>
+        e.type === "tool_completed" && e.data?.tool === "search_knowledge_base",
+    );
+    expect(searchEvent?.data?.metadata).toMatchObject({ degraded: true });
+    expect(
+      (searchEvent?.data?.metadata as { degradedReason?: string })
+        .degradedReason,
+    ).toContain("ECONNREFUSED");
     expect(
       g2.trace.recoveries.some(
-        (r) =>
-          r.failureCategory === "retrieval_error" &&
-          r.action === "fallback_to_bm25_sparse_search" &&
-          r.succeeded,
+        (r) => r.action === "fallback_to_bm25_sparse_search",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(g2.evidences.length).toBeGreaterThan(0);
 
     // G3: File tool permission denied (read-only permissions) -> clear permission_error status, preserves report

@@ -195,3 +195,12 @@ export function appendWebSources(
       .join("\n")
   );
 }
+
+/** 降级检索时追加固定标题的检索说明；重复生成不叠加。 */
+export function appendRetrievalNotice(
+  report: string,
+  degradedReason?: string,
+): string {
+  if (!degradedReason || report.includes("## 检索说明")) return report;
+  return `${report}\n\n## 检索说明\n本轮仅使用稀疏检索（BM25），未使用向量检索。原因：${degradedReason}`;
+}

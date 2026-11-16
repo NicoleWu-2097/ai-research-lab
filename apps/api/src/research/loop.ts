@@ -1,4 +1,5 @@
 import {
+  appendRetrievalNotice,
   appendWebSources,
   fallbackReport,
   plannedStop,
@@ -11,6 +12,7 @@ import { ModelError } from "../model/types.js";
 import { raceWithAbort, createDeadline } from "../model/deadline.js";
 import type { ResearchTools, ToolEventSink } from "../mcp/client.js";
 import { chunkDocument, type Chunk } from "../rag/chunks.js";
+import type { RetrievalStatus } from "../rag/service.js";
 import type { LocalRetriever } from "./agentic.js";
 import { isWebRetrieverReady } from "../search/brave.js";
 import {
@@ -53,6 +55,21 @@ const analysisSchema = z.object({
 type Analysis = z.infer<typeof analysisSchema>;
 // id 用于本次报告的引用；chunkId 保留底层片段标识，score 为检索分数。
 type Evidence = Chunk & { chunkId: string; score: number | null };
+// 服务层降级时返回命中与降级原因；联网检索实现只提供 retrieve。
+interface StatusRetriever extends LocalRetriever {
+  retrieveWithStatus(
+    question: string,
+    signal: AbortSignal,
+  ): Promise<RetrievalStatus>;
+}
+function retrievesWithStatus(
+  retriever: LocalRetriever,
+): retriever is StatusRetriever {
+  return (
+    typeof (retriever as Partial<StatusRetriever>).retrieveWithStatus ===
+    "function"
+  );
+}
 // 单次图运行的共享状态：节点读取当前值，只返回需要更新的字段。
 // 这里未定义自定义 reducer，数组的追加和去重由节点显式完成。
 const State = Annotation.Root({
@@ -71,6 +88,9 @@ const State = Annotation.Root({
   // approved 控制是否可发布草稿；stop 说明提前停止的原因。
   approved: Annotation<boolean>(),
   stop: Annotation<string>(),
+  // 本轮至少有一次本地检索降级时保留原因，供报告与事件使用。
+  degraded: Annotation<boolean>(),
+  degradedReason: Annotation<string>(),
   report: Annotation<string>(),
   outcome: Annotation<string>(),
 });
@@ -370,19 +390,44 @@ export async function runResearchLoop(
         });
         // raceWithAbort 让等待中的工具调用能够响应任务取消或超时。
         // MCP 返回完整文档，需切块；没有向量相似度分数时标为 null。
-        const incoming =
-          action === "web"
-            ? await raceWithAbort(web!.retrieve(query, signal), signal)
-            : action === "local"
-              ? await raceWithAbort(local!.retrieve(query, signal), signal)
-              : (
-                  await raceWithAbort(
-                    tools!.collect(query, model, signal, emit),
-                    signal,
-                  )
-                ).flatMap((s) =>
-                  chunkDocument(s).map((c) => ({ ...c, score: null })),
-                );
+        let incoming: Array<Chunk & { score: number | null }>;
+        let degraded = false;
+        let degradedReason = "";
+        if (action === "local") {
+          const retriever = local!;
+          if (retrievesWithStatus(retriever)) {
+            const result = await raceWithAbort(
+              retriever.retrieveWithStatus(query, signal),
+              signal,
+            );
+            incoming = result.hits;
+            degraded = result.degraded;
+            degradedReason = result.degradedReason ?? "";
+          } else {
+            incoming = await raceWithAbort(
+              retriever.retrieve(query, signal),
+              signal,
+            );
+          }
+        } else if (action === "web") {
+          incoming = await raceWithAbort(web!.retrieve(query, signal), signal);
+        } else {
+          incoming = (
+            await raceWithAbort(
+              tools!.collect(query, model, signal, emit),
+              signal,
+            )
+          ).flatMap((s) =>
+            chunkDocument(s).map((c) => ({ ...c, score: null })),
+          );
+        }
+        if (degraded) {
+          await emit("RETRIEVAL_DEGRADED", {
+            strategy: "sparse",
+            reason: degradedReason,
+            message: `嵌入服务不可用，本轮降级为仅使用稀疏检索：${degradedReason}`,
+          });
+        }
         // 按原始片段 ID 去重，再为本任务分配稳定的展示引用编号。
         const sources = [...state.sources];
         for (const hit of incoming)
@@ -409,6 +454,8 @@ export async function runResearchLoop(
           queries: [...state.queries, `${action}:${normalize(query)}`],
           // 首轮没有结果仍允许再规划；补充轮没有新增证据则停止。
           stop: "",
+          degraded: state.degraded || degraded,
+          degradedReason: degraded ? degradedReason : state.degradedReason,
           issues: sources.length
             ? state.issues
             : ["尚未找到相关证据，请补充研究"],
@@ -691,7 +738,13 @@ export async function runResearchLoop(
             outcome = "insufficient";
           }
         }
-        return { report: appendWebSources(report, state.sources), outcome };
+        return {
+          report: appendRetrievalNotice(
+            appendWebSources(report, state.sources),
+            state.degradedReason,
+          ),
+          outcome,
+        };
       }),
     )
     // 恢复时从快照保存的下一节点开始；新任务从 planning 开始。
@@ -748,6 +801,8 @@ export async function runResearchLoop(
           issues: [],
           approved: false,
           stop: "",
+          degraded: false,
+          degradedReason: "",
           report: "",
           outcome: "",
         },

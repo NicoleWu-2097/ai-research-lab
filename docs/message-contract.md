@@ -18,3 +18,15 @@
 history 保留每轮的 turn、报告、快照、执行状态和结束时间。旧 JSON 数据读取时补齐确定性轮次 ID，已有报告保守标为 unreviewed；不清库，不凭 completed 推断质量。后续写入会保存补齐字段。
 
 审计/API SSE 保留 seq、action、detail，同时提供稳定 id、roundId、kind。kind 分为 user_message、status、approval、tool、rag、report；客户端按 id 去重，按 roundId 分组。报告按轮次和 revision 识别更新，重复轮询不重复追加。历史未知事件保守归为 status，不猜测原文类型。
+
+## 检索降级事件
+
+嵌入服务调用失败时，本地检索降级为稀疏检索并继续返回命中。研究循环在 `RETRIEVAL_STARTED` 之后、`RETRIEVAL_COMPLETED` 之前发出 `RETRIEVAL_DEGRADED`，属于 rag 类型：
+
+| 字段 | 含义 |
+| --- | --- |
+| strategy | 本轮实际使用的检索策略，固定为 sparse |
+| reason | 降级原因，取嵌入服务返回的错误信息 |
+| message | 供界面展示的说明，含降级原因 |
+
+未降级的轮次不发出该事件。`/api/agent/*` 的 `tool_completed` 事件把同一份降级信息放在 `data.metadata` 的 `degraded` 与 `degradedReason` 中。

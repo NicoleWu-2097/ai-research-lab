@@ -41,6 +41,9 @@ export interface SearchKnowledgeBaseResult {
   filteredIrrelevantCount: number;
   deduplicatedCount: number;
   rerankLog: RerankRecord[];
+  /** 嵌入调用失败时本轮只使用稀疏检索。 */
+  degraded: boolean;
+  degradedReason?: string;
   emptyReason?: string;
 }
 
