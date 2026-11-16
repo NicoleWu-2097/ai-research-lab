@@ -10,7 +10,7 @@ import {
   type Hit,
 } from "./chunks.js";
 import { validateVectors, type Embedder } from "./embedding.js";
-import { VectorStore } from "./store.js";
+import { VectorStore, type StoredDocument } from "./store.js";
 import {
   applyMetadataFilters,
   bm25Search,
@@ -37,6 +37,20 @@ export interface RetrievalStatus {
   hits: Hit[];
   degraded: boolean;
   degradedReason?: string;
+}
+
+/** 重灌前的索引配置：current 为现有索引，next 为本次重灌写入的配置。 */
+export interface IndexConfiguration {
+  current: { embeddingKey: string; indexedAt: string } | null;
+  next: string;
+}
+
+/** 重灌统计：文档数与片段数取实际入库结果，降级次数为嵌入失败被跳过的已存文档数。 */
+export interface ReindexStats {
+  documents: number;
+  chunks: number;
+  degraded: number;
+  elapsedMs: number;
 }
 
 /** 降级原因取嵌入服务返回的错误信息，报告与事件据此说明证据来源。 */
@@ -90,6 +104,71 @@ export class RagService implements ResearchTools {
     await this.store.initialize();
     await this.store.replace(this.indexKey, chunks, vectors, signal);
     return { documents: seen.size, duplicates, chunks: chunks.length };
+  }
+
+  /**
+   * 重灌：先按资料目录全量替换索引，再把已存文档重建片段与向量追加到同一配置。
+   * 已存文档的行保持不变；嵌入失败的文档计入降级并跳过，其余文档照常入库。
+   */
+  async reindex(signal: AbortSignal): Promise<ReindexStats> {
+    const startedAt = Date.now();
+    const corpus = await this.ingest(signal);
+    const stored = await this.store.listDocuments();
+    let documents = corpus.documents;
+    let degraded = 0;
+    for (const document of stored) {
+      signal.throwIfAborted();
+      const chunks = this.rebuildStoredChunks(document);
+      let vectors: number[][];
+      try {
+        vectors = await this.embedChunkTexts(chunks, signal);
+      } catch {
+        if (signal.aborted) throw signal.reason;
+        degraded += 1;
+        continue;
+      }
+      await this.store.append(this.indexKey, chunks, vectors, signal);
+      documents += 1;
+    }
+    const { chunks } = await this.store.health(this.indexKey);
+    return { documents, chunks, degraded, elapsedMs: Date.now() - startedAt };
+  }
+
+  /** 已存文档按 upload 写入时的分块与元数据形状重建，带上 projectId。 */
+  private rebuildStoredChunks(document: StoredDocument) {
+    return buildKnowledgeChunks(
+      {
+        id: document.id,
+        content: document.content,
+        sha256: document.sha256,
+        retrievedAt: new Date().toISOString(),
+      },
+      {
+        projectId: document.projectId,
+        source: document.name,
+        title: document.name,
+        embeddingModel: this.embedder.key,
+        embeddingVersion: "chars900-overlap120-v1",
+      },
+    ).map((chunk) => ({ ...chunk, filename: document.name }));
+  }
+
+  private async embedChunkTexts(chunks: Chunk[], signal: AbortSignal) {
+    const vectors: number[][] = [];
+    for (let i = 0; i < chunks.length; i += 16) {
+      const texts = chunks.slice(i, i + 16).map((chunk) => chunk.content);
+      vectors.push(
+        ...validateVectors(
+          await raceWithAbort(
+            this.embedder.embed(texts, "document", signal),
+            signal,
+          ),
+          texts.length,
+          this.embedder.dimensions,
+        ),
+      );
+    }
+    return vectors;
   }
 
   async upload(
@@ -210,6 +289,11 @@ export class RagService implements ResearchTools {
 
   health() {
     return this.store.health(this.indexKey);
+  }
+
+  async indexConfiguration(): Promise<IndexConfiguration> {
+    await this.store.initialize();
+    return { current: await this.store.currentIndex(), next: this.indexKey };
   }
 
   async retrieveWithStatus(
@@ -392,12 +476,15 @@ export class RagService implements ResearchTools {
             : reciprocalRankFusion(rankedLists, Math.max(topK * 2, 8));
 
       // 4. Reranking & Relevance Judgment
-      const { hits: relevantHits, filteredIrrelevantCount, rerankLog } =
-        rerankAndFilterHits(rewrittenQueries, fusedHits, {
-          enableReranking: input.enableReranking ?? true,
-          enableRelevanceFilter: input.enableRelevanceFilter ?? true,
-          minScore: Math.min(minScore, 0.2),
-        });
+      const {
+        hits: relevantHits,
+        filteredIrrelevantCount,
+        rerankLog,
+      } = rerankAndFilterHits(rewrittenQueries, fusedHits, {
+        enableReranking: input.enableReranking ?? true,
+        enableRelevanceFilter: input.enableRelevanceFilter ?? true,
+        minScore: Math.min(minScore, 0.2),
+      });
 
       // 5. Parent-Child Expansion & Deduplication
       const { hits: finalHits, deduplicatedCount } = deduplicateAndExpandHits(
