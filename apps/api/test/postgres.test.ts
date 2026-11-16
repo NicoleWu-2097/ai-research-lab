@@ -84,7 +84,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
       // The reader sees one complete configuration or an explicit mismatch, never mixed dimensions.
       expect([
         1,
-        "Reingest documents for this embedding configuration.",
+        "Reingest documents for this embedding configuration: pnpm --filter @research-lab/api rag:reindex.",
       ]).toContain(await reader);
       expect(
         (await store.search("model-3d", [1, 0, 0], 4, 0.5))[0]?.score,

@@ -13,7 +13,10 @@ import {
   evaluateTaskExecution,
   summarizeEvaluationSuite,
 } from "../src/agent/evaluation.js";
-import { redactObject, redactSensitiveText } from "../src/agent/observability.js";
+import {
+  redactObject,
+  redactSensitiveText,
+} from "../src/agent/observability.js";
 import { AtlasAgentRuntime } from "../src/agent/runtime.js";
 import { ModelError, type ModelProvider } from "../src/model/types.js";
 import type { Embedder } from "../src/rag/embedding.js";
@@ -35,6 +38,7 @@ let ragRoot: string;
  */
 const embedder: Embedder = {
   key: "atlas-refactor-embedder-v1",
+  model: "atlas-refactor-embedder-v1",
   dimensions: 4,
   async embed(texts) {
     return texts.map((t) => {
@@ -114,7 +118,10 @@ function createSmartMockProvider(): ModelProvider & {
       const text = await this.generate(prompt, signal);
       yield text;
     },
-    async structuredOutput<T>(prompt: string, schema: import("zod").z.ZodType<T>) {
+    async structuredOutput<T>(
+      prompt: string,
+      schema: import("zod").z.ZodType<T>,
+    ) {
       prompts.push(prompt);
       return schema.parse({
         action: "finish",
@@ -171,9 +178,9 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
     expect(resB.output).not.toContain("花青素");
     expect(resB.output).not.toContain("花朵呈红色");
     // Must NOT cite Project A's botany chunks
-    expect(
-      resB.evidences.some((e) => e.originalText.includes("花青素")),
-    ).toBe(false);
+    expect(resB.evidences.some((e) => e.originalText.includes("花青素"))).toBe(
+      false,
+    );
     // Verify the synthesis prompt sent to the model for Project B did NOT contain Project A's report
     const lastPrompt = provider.prompts.at(-1) ?? "";
     expect(lastPrompt).not.toContain("花朵呈红色的生物学机制");
@@ -247,9 +254,7 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
 
     expect(saveRes.taskState.status).toBe("completed");
     expect(
-      saveRes.trace.toolCalls.some(
-        (t) => t.tool === "write_file" && t.success,
-      ),
+      saveRes.trace.toolCalls.some((t) => t.tool === "write_file" && t.success),
     ).toBe(true);
     expect(saveRes.artifacts).toHaveLength(1);
 
@@ -322,7 +327,8 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
           {
             id: "WEB:1",
             documentId: "https://example.org/hybrid-rag",
-            content: "Hybrid RAG with RRF improves recall by 18% on multi-hop benchmarks.",
+            content:
+              "Hybrid RAG with RRF improves recall by 18% on multi-hop benchmarks.",
             sha256: "b".repeat(64),
             retrievedAt: new Date().toISOString(),
             ingestedAt: new Date().toISOString(),
@@ -358,9 +364,13 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
     expect(turn2.taskState.status).toBe("completed");
     // Background section must be preserved intact!
     expect(turn2.output).toContain("## 背景");
-    expect(turn2.output).toContain("Agentic RAG 将检索作为智能体可主动调度的工具");
+    expect(turn2.output).toContain(
+      "Agentic RAG 将检索作为智能体可主动调度的工具",
+    );
     // Conclusion section must be updated!
-    expect(turn2.output).toContain("混合检索（Dense + BM25 + RRF）结合重排序显著提升了召回率");
+    expect(turn2.output).toContain(
+      "混合检索（Dense + BM25 + RRF）结合重排序显著提升了召回率",
+    );
     // Must not stack two full copies of "# Agentic RAG 调研报告"
     expect(turn2.output.match(/# Agentic RAG 调研报告/g)?.length).toBe(1);
 
@@ -424,6 +434,7 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
       vectorStore,
       {
         key: embedder.key,
+        model: embedder.model,
         dimensions: embedder.dimensions,
         async embed() {
           throw new Error("connect ECONNREFUSED 127.0.0.1:11434 (Ollama down)");
@@ -443,15 +454,16 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
       message: "研究 Atlas 的 PostgreSQL 存储设计",
     });
     expect(g2.taskState.status).toBe("completed");
+    const degradedEvent = g2.trace.events.find(
+      (e) => e.type === "RETRIEVAL_DEGRADED",
+    );
+    expect(degradedEvent?.data).toMatchObject({ strategy: "sparse" });
+    expect(String(degradedEvent?.data?.reason)).toContain("ECONNREFUSED");
     const searchEvent = g2.trace.events.find(
       (e) =>
         e.type === "tool_completed" && e.data?.tool === "search_knowledge_base",
     );
-    expect(searchEvent?.data?.metadata).toMatchObject({ degraded: true });
-    expect(
-      (searchEvent?.data?.metadata as { degradedReason?: string })
-        .degradedReason,
-    ).toContain("ECONNREFUSED");
+    expect(searchEvent?.data?.metadata).toBeUndefined();
     expect(
       g2.trace.recoveries.some(
         (r) => r.action === "fallback_to_bm25_sparse_search",
@@ -518,7 +530,10 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
               type: "article",
               primary_location: {
                 landing_page_url: "https://dl.acm.org/doi/10.1145/1234567.890",
-                source: { display_name: "ACM Computing Surveys", type: "journal" },
+                source: {
+                  display_name: "ACM Computing Surveys",
+                  type: "journal",
+                },
               },
               authorships: [{ author: { display_name: "Alice Zhang" } }],
               abstract_inverted_index: {
@@ -555,7 +570,8 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
               paperId: "s2-paper-2",
               title: "Self-Reflective RAG with Critique Loops",
               year: 2024,
-              abstract: "We propose self-reflective critique loops for grounding.",
+              abstract:
+                "We propose self-reflective critique loops for grounding.",
               url: "https://www.semanticscholar.org/paper/s2-paper-2",
               venue: "NeurIPS",
               externalIds: { DOI: "10.5555/neurips.2024.002" },
@@ -632,7 +648,9 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
     expect(parsed.tables).toHaveLength(1);
     expect(parsed.tables[0]?.crossPage).toBe(true);
     expect(parsed.figureCaptions).toHaveLength(1);
-    expect(parsed.figureCaptions[0]?.caption).toContain("Atlas General Agent Loop");
+    expect(parsed.figureCaptions[0]?.caption).toContain(
+      "Atlas General Agent Loop",
+    );
     expect(parsed.footnotes).toHaveLength(1);
     expect(parsed.references).toHaveLength(1);
     // Verifies two-column interleave and cross-page table locators are preserved
@@ -653,7 +671,8 @@ describe("Atlas Refactoring Regression Suite (Cases A–G & Core Capabilities)",
     });
 
     // Verify secret redaction
-    const dirty = "Error calling OpenAI with key sk-proj-1234567890abcdefghijklmnop and Authorization: Bearer secret_token_999";
+    const dirty =
+      "Error calling OpenAI with key sk-proj-1234567890abcdefghijklmnop and Authorization: Bearer secret_token_999";
     const redacted = redactSensitiveText(dirty);
     expect(redacted).not.toContain("sk-proj-1234567890");
     expect(redacted).not.toContain("secret_token_999");

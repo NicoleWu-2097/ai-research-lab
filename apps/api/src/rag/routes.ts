@@ -8,10 +8,10 @@ const PROBE_TEXT = "health check";
 
 async function probeEmbedding(
   rag: RagService,
-  model: string | null,
   timeoutMs: number,
   parentSignal: AbortSignal,
 ) {
+  const model = rag.embedder.model;
   const expectedDimensions = rag.embedder.dimensions;
   const deadline = createDeadline(parentSignal, timeoutMs);
   try {
@@ -41,11 +41,7 @@ async function probeEmbedding(
   }
 }
 
-export function ragRoutes(
-  rag: RagService | null,
-  timeoutMs: number,
-  embeddingModel: string | null = null,
-) {
+export function ragRoutes(rag: RagService | null, timeoutMs: number) {
   const routes = new Hono();
   routes.post("/upload", bodyLimit({ maxSize: 32000 }), async (c) => {
     const origin = c.req.header("origin");
@@ -113,12 +109,7 @@ export function ragRoutes(
       const health = await rag.health();
       const probe =
         context.req.query("probe") === "true"
-          ? await probeEmbedding(
-              rag,
-              embeddingModel,
-              timeoutMs,
-              context.req.raw.signal,
-            )
+          ? await probeEmbedding(rag, timeoutMs, context.req.raw.signal)
           : undefined;
       return context.json(
         {

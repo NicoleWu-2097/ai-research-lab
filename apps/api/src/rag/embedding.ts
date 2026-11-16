@@ -1,10 +1,17 @@
 import { Ollama } from "ollama";
 import { z } from "zod";
 
+import {
+  DEFAULT_EMBEDDING_BASE_URL,
+  EMBEDDING_PROVIDERS,
+  type EmbeddingProvider,
+} from "../config/embedding.js";
+
 export type EmbeddingKind = "query" | "document";
 
 export interface Embedder {
   readonly key: string;
+  readonly model: string;
   readonly dimensions: number;
   embed(
     texts: string[],
@@ -35,14 +42,7 @@ export function validateVectors(
   return vectors;
 }
 
-type CompatibleProvider = "openai" | "voyage" | "jina";
-
-export const DEFAULT_EMBEDDING_BASE_URL = {
-  ollama: "http://localhost:11434",
-  openai: "https://api.openai.com/v1",
-  voyage: "https://api.voyageai.com/v1",
-  jina: "https://api.jina.ai/v1",
-} as const;
+type CompatibleProvider = Exclude<EmbeddingProvider, "ollama">;
 
 const PROVIDER_LABEL = {
   ollama: "Ollama",
@@ -193,7 +193,7 @@ export function createEmbedder(
 ): Embedder {
   const config = z
     .object({
-      EMBEDDING_PROVIDER: z.enum(["ollama", "openai", "voyage", "jina"]),
+      EMBEDDING_PROVIDER: z.enum(EMBEDDING_PROVIDERS),
       EMBEDDING_MODEL: z.string().trim().min(1),
       EMBEDDING_DIMENSIONS: z.coerce.number().int().min(1).max(16000),
       EMBEDDING_BASE_URL: z.url().optional(),
@@ -238,6 +238,7 @@ export function createEmbedder(
       config.EMBEDDING_DIMENSIONS,
       "chars900-overlap120-v1",
     ]),
+    model: config.EMBEDDING_MODEL,
     dimensions: config.EMBEDDING_DIMENSIONS,
     async embed(texts, kind, signal) {
       if (missingKey) throw new Error(missingKey);

@@ -18,6 +18,7 @@ const signal = new AbortController().signal;
 let root: string;
 const embedding: Embedder = {
   key: "deterministic-v1",
+  model: "deterministic-v1",
   dimensions: 3,
   async embed(texts) {
     return texts.map((text) =>
@@ -187,6 +188,37 @@ it("degrades to sparse hits with a reason when the embedding service fails", asy
   const delegated = await unavailable.retrieve("PostgreSQL", signal);
   expect(delegated.map((hit) => hit.id)).toEqual(
     result.hits.map((hit) => hit.id),
+  );
+});
+
+it("emits a degraded retrieval event from collect when the embedding service fails", async () => {
+  const unavailable = new RagService(
+    store,
+    {
+      ...embedding,
+      async embed() {
+        throw new Error("embedding service offline");
+      },
+    },
+    root,
+    0.5,
+  );
+  const events: { type: string; [key: string]: unknown }[] = [];
+  const hits = await unavailable.collect(
+    "PostgreSQL",
+    model,
+    signal,
+    async (type, payload) => {
+      events.push({ type, ...payload });
+    },
+  );
+  expect(hits.map((hit) => hit.documentId)).toContain("storage.md");
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "RETRIEVAL_DEGRADED",
+      strategy: "sparse",
+      reason: expect.stringContaining("offline"),
+    }),
   );
 });
 
@@ -451,6 +483,7 @@ it("probes the embedding service only when the health check asks for it", async 
     store,
     {
       key: "deterministic-v1",
+      model: "voyage-4",
       dimensions: 3,
       async embed(texts, kind) {
         calls.push({ texts, kind });
@@ -470,7 +503,6 @@ it("probes the embedding service only when the health check asks for it", async 
     false,
     null,
     null,
-    "voyage-4",
   );
 
   const plain = await app.request("/api/rag/health");
@@ -499,6 +531,7 @@ it("reports a probed dimension mismatch with both dimensions", async () => {
       store,
       {
         key: "deterministic-v1",
+        model: "voyage-4",
         dimensions: 3,
         async embed() {
           return [[1, 0]];
@@ -512,7 +545,6 @@ it("reports a probed dimension mismatch with both dimensions", async () => {
     false,
     null,
     null,
-    "voyage-4",
   );
 
   const response = await app.request("/api/rag/health?probe=true");
@@ -536,6 +568,7 @@ it("reports a failed probe without failing the health check", async () => {
       store,
       {
         ...embedding,
+        model: "voyage-4",
         async embed() {
           throw new Error("Embedding request failed with status 401.");
         },
@@ -548,7 +581,6 @@ it("reports a failed probe without failing the health check", async () => {
     false,
     null,
     null,
-    "voyage-4",
   );
 
   const response = await app.request("/api/rag/health?probe=true");

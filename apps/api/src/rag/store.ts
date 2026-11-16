@@ -281,7 +281,9 @@ export class VectorStore {
         "SELECT embedding_key FROM rag_index",
       );
       if (index[0]?.embedding_key !== key)
-        throw new Error("Reingest documents for this embedding configuration.");
+        throw new Error(
+          "Reingest documents for this embedding configuration: pnpm --filter @research-lab/api rag:reindex.",
+        );
       const fetchLimit = projectId ? Math.max(limit * 5, 25) : limit;
       const { rows } = await sql.query<{ metadata: Chunk; score: number }>(
         `SELECT metadata, 1 - (embedding <=> $1::vector) AS score FROM rag_chunks WHERE 1 - (embedding <=> $1::vector) >= $2 ORDER BY embedding <=> $1::vector, id LIMIT $3`,

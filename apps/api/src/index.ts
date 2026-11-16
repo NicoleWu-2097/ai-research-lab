@@ -129,7 +129,6 @@ const app = createApp(
     config.MULTI_AGENT_ENABLED === "true",
   human,
   web,
-  embeddingInfo?.model ?? null,
 );
 
 const server = serve({

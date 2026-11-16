@@ -258,6 +258,13 @@ export class AtlasAgentRuntime {
           result.rerankLog,
         );
 
+        if (result.degraded)
+          await context.emit?.(
+            "RETRIEVAL_DEGRADED",
+            `嵌入服务不可用，本轮降级为仅使用稀疏检索：${result.degradedReason ?? ""}`,
+            { strategy: "sparse", reason: result.degradedReason ?? "" },
+          );
+
         for (const ev of evidences) {
           await context.emit?.(
             "evidence_added",
@@ -283,14 +290,6 @@ export class AtlasAgentRuntime {
               : {}),
             ...(result.emptyReason ? { emptyReason: result.emptyReason } : {}),
           },
-          ...(result.degraded
-            ? {
-                metadata: {
-                  degraded: true,
-                  degradedReason: result.degradedReason,
-                },
-              }
-            : {}),
         };
       },
     };
@@ -758,16 +757,12 @@ export class AtlasAgentRuntime {
         const targetPath = activeRequest.targetFilePath ?? "report.md";
         const contentToSave =
           projectMemory.activeReport?.content ||
-          recentTurns
-            .filter((t) => t.role === "assistant")
-            .at(-1)?.content ||
+          recentTurns.filter((t) => t.role === "assistant").at(-1)?.content ||
           `# Report\n\n${activeRequest.resolvedGoal}`;
 
-        await emit(
-          "plan_updated",
-          `计划将当前报告写入文件：${targetPath}`,
-          { plan: ["write_file", "verify_file"] },
-        );
+        await emit("plan_updated", `计划将当前报告写入文件：${targetPath}`, {
+          plan: ["write_file", "verify_file"],
+        });
 
         taskState.status = "waiting_for_tool";
         taskState.resourceUsage.toolCalls++;
@@ -1225,7 +1220,8 @@ export class AtlasAgentRuntime {
               failureCategory: "network_error",
               action: "graceful_fallback_without_web",
               succeeded: true,
-              message: "网络搜索不可用或超时，降级使用本地上下文与标注不确定性的知识回答。",
+              message:
+                "网络搜索不可用或超时，降级使用本地上下文与标注不确定性的知识回答。",
             });
           }
         } else if (plannedAction.action === "discover_literature") {
@@ -1285,10 +1281,16 @@ export class AtlasAgentRuntime {
         if (ev.projectId && ev.projectId !== projectId) return false;
         const evTokens = tokenizeText(`${ev.title ?? ""} ${ev.originalText}`);
         const hasOverlap = evTokens.some((t) => goalTokens.has(t));
-        return hasOverlap || (ev.relevanceScore !== undefined && ev.relevanceScore >= 0.75);
+        return (
+          hasOverlap ||
+          (ev.relevanceScore !== undefined && ev.relevanceScore >= 0.75)
+        );
       });
 
-      if (activeRequest.continuity === "supplement_citations" && projectMemory.activeReport) {
+      if (
+        activeRequest.continuity === "supplement_citations" &&
+        projectMemory.activeReport
+      ) {
         // Append newly retrieved citations to the existing report without duplicating the report
         const baseReport = projectMemory.activeReport.content;
         const allProjectEvidences = [
@@ -1367,7 +1369,9 @@ export class AtlasAgentRuntime {
               "No local RAG or external evidence matched this query. Answer using your general knowledge or workspace context, explicitly note any uncertainties, and NEVER invent or output any [RAG:...] or fake citation IDs.",
             ]),
         ...(compacted.recentToolResults.length > 0
-          ? [`Workspace / Tool Observations:\n${compacted.recentToolResults.join("\n")}`]
+          ? [
+              `Workspace / Tool Observations:\n${compacted.recentToolResults.join("\n")}`,
+            ]
           : []),
       ].join("\n\n");
 
@@ -1391,7 +1395,9 @@ export class AtlasAgentRuntime {
         draft = draft.replace(/\[(?:RAG|WEB|PAPER|EV):[^\]]+\]/g, "").trim();
         if (
           verificationMode !== "general" &&
-          !/未包含|未检索到|通用知识|不确定|待核实|no local evidence/i.test(draft)
+          !/未包含|未检索到|通用知识|不确定|待核实|no local evidence/i.test(
+            draft,
+          )
         ) {
           draft +=
             "\n\n> 注：当前本地知识库中未检索到与该问题直接相关的证据，以上回答基于通用知识整理，具体事实细节建议结合外部资料进一步核实。";

@@ -89,7 +89,6 @@ const State = Annotation.Root({
   approved: Annotation<boolean>(),
   stop: Annotation<string>(),
   // 本轮至少有一次本地检索降级时保留原因，供报告与事件使用。
-  degraded: Annotation<boolean>(),
   degradedReason: Annotation<string>(),
   report: Annotation<string>(),
   outcome: Annotation<string>(),
@@ -454,7 +453,6 @@ export async function runResearchLoop(
           queries: [...state.queries, `${action}:${normalize(query)}`],
           // 首轮没有结果仍允许再规划；补充轮没有新增证据则停止。
           stop: "",
-          degraded: state.degraded || degraded,
           degradedReason: degraded ? degradedReason : state.degradedReason,
           issues: sources.length
             ? state.issues
@@ -801,7 +799,6 @@ export async function runResearchLoop(
           issues: [],
           approved: false,
           stop: "",
-          degraded: false,
           degradedReason: "",
           report: "",
           outcome: "",

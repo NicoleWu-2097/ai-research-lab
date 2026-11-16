@@ -1,5 +1,7 @@
 # Milestone 5：本地 RAG
 
+> 说明：本页是历史里程碑记录，下面仍按当时的本地 Ollama 方案书写。当前默认已改为外部嵌入服务，见 [ADR 0004](decisions/0004-external-embedding.md)。
+
 固定流程：问题 → embedding → pgvector 检索 → 带引用的流式报告。启用 RAG 时取代 M4 的全文选择流程；未启用时仍可使用 MCP。自主路由留到 M6。
 
 当前版本默认使用 [M6 自主路由](milestone6.md)；设 `AGENTIC_RAG_ENABLED=false` 可验证本页描述的 M5 固定流程。
