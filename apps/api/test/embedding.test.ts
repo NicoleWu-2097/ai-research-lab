@@ -16,6 +16,7 @@ function adapter(
       provider,
       baseUrl: `https://${provider}.example/v1`,
       apiKey: "test-only",
+      authHeader: "bearer",
       model: "embed",
       dimensions,
     },
@@ -278,10 +279,9 @@ describe("openai adapter", () => {
       [1, 0],
       [0, 1],
     ]);
-    expect(bodies[0]).toMatchObject({
+    expect(bodies[0]).toEqual({
       model: "embed",
       input: ["one", "two"],
-      encoding_format: "float",
     });
     for (const field of [
       "input_type",
@@ -290,8 +290,31 @@ describe("openai adapter", () => {
       "dimensions",
       "truncation",
       "truncate",
+      "encoding_format",
     ]) {
       expect(bodies[0]).not.toHaveProperty(field);
     }
+  });
+
+  it("sends an api-key header when the gateway requires it", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({ data: [{ index: 0, embedding: [1, 0] }] }),
+    );
+    const embedder = createEmbedder(
+      {
+        EMBEDDING_PROVIDER: "openai",
+        EMBEDDING_MODEL: "bge-m3",
+        EMBEDDING_DIMENSIONS: "2",
+        EMBEDDING_BASE_URL: "https://gateway.example/v1",
+        EMBEDDING_AUTH_HEADER: "api-key",
+        OPENAI_API_KEY: "gateway-key",
+      },
+      fetchImpl,
+    );
+
+    await embedder.embed(["hello"], "query", signal);
+    const headers = new Headers(fetchImpl.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("api-key")).toBe("gateway-key");
+    expect(headers.get("authorization")).toBeNull();
   });
 });

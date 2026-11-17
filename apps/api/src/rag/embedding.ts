@@ -91,6 +91,7 @@ export interface CompatibleEmbedderConfig {
   readonly provider: CompatibleProvider;
   readonly baseUrl: string;
   readonly apiKey: string;
+  readonly authHeader: "bearer" | "api-key";
   readonly model: string;
   readonly dimensions: number;
 }
@@ -104,7 +105,7 @@ export class OpenAICompatibleEmbedder {
 
   private requestBody(texts: string[], kind: EmbeddingKind) {
     const { provider, model, dimensions } = this.config;
-    // encoding_format 只有 OpenAI 接受；Voyage 只认 base64，Jina 用 embedding_type，两家留空即返回浮点数组。
+    // 三家附加字段不同；OpenAI 与网关只认 model 与 input，多传会被拒。
     if (provider === "voyage")
       return {
         model,
@@ -121,7 +122,7 @@ export class OpenAICompatibleEmbedder {
         dimensions,
         truncate: false,
       };
-    return { model, input: texts, encoding_format: "float" };
+    return { model, input: texts };
   }
 
   async embed(
@@ -138,7 +139,9 @@ export class OpenAICompatibleEmbedder {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            authorization: `Bearer ${this.config.apiKey}`,
+            ...(this.config.authHeader === "api-key"
+              ? { "api-key": this.config.apiKey }
+              : { authorization: `Bearer ${this.config.apiKey}` }),
           },
           body,
           signal,
@@ -216,6 +219,7 @@ export function createEmbedder(
       EMBEDDING_MODEL: z.string().trim().min(1),
       EMBEDDING_DIMENSIONS: z.coerce.number().int().min(1).max(16000),
       EMBEDDING_BASE_URL: z.url().optional(),
+      EMBEDDING_AUTH_HEADER: z.enum(["bearer", "api-key"]).default("bearer"),
       EMBEDDING_API_KEY: z.string().trim().optional(),
       OPENAI_API_KEY: z.string().trim().optional(),
     })
@@ -244,6 +248,7 @@ export function createEmbedder(
             provider,
             baseUrl,
             apiKey: apiKey ?? "",
+            authHeader: config.EMBEDDING_AUTH_HEADER,
             model: config.EMBEDDING_MODEL,
             dimensions: config.EMBEDDING_DIMENSIONS,
           },
