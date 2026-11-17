@@ -43,7 +43,8 @@ describe("pglite driver", () => {
     await second.close();
   });
 
-  it("runs transactions with the vector extension available", async () => {    const directory = tempDirectory();
+  it("runs transactions with the vector extension available", async () => {
+    const directory = tempDirectory();
     const { database, close } = createDatabase({
       DATABASE_DRIVER: "pglite",
       PGLITE_DATA_DIR: directory,
