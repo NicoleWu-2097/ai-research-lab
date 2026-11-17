@@ -4,14 +4,34 @@ M11 now uses an Ink terminal client with streamed report previews, approval at t
 
 ## Run locally
 
-Requires Node 24 and pnpm 11.22.0. Persistence runs on PostgreSQL through `DATABASE_URL`, or inside the API process through PGlite when `DATABASE_DRIVER=pglite` and `PGLITE_DATA_DIR=.pglite`; PGlite keeps a single connection, so one process owns the data directory at a time. Configure `apps/api/.env` with `HUMAN_ENABLED=true`, database settings, your model API key and `EMBEDDING_API_KEY` for the embedding service.
+Requires Node 24 and pnpm 11.22.0.
 
 ```bash
 pnpm install
-pnpm dev
+cp apps/api/.env.example apps/api/.env
 ```
 
-In another terminal run `pnpm cli`. Enter a question to create a project; after completion, enter another message to revise it. Use `/upload path/to/notes.md` to index a document. RAG uses an external embedding service by default (Voyage); fill `EMBEDDING_API_KEY` in `.env`. Ollama remains an optional embedding provider.
+Fill `apps/api/.env` before starting:
+
+- `OPENAI_API_KEY` for the chat model. Keep `OPENAI_BASE_URL`, `OPENAI_API_STYLE=chat-completions` and `OPENAI_AUTH_HEADER=api-key` when pointing at the HKUST GenAI service.
+- an embedding service. The same gateway serves `text-embedding-3-small` at 1536 dimensions; the commented block in `.env.example` holds the four lines to switch to it. Voyage and Jina work as well through `EMBEDDING_API_KEY`.
+
+Persistence runs on PostgreSQL through `DATABASE_URL`. Start it with `docker compose up -d --wait`, which serves PostgreSQL 17 with pgvector on `127.0.0.1:5432`. Without Docker, set `DATABASE_DRIVER=pglite` and `PGLITE_DATA_DIR=.pglite`; PGlite runs the same engine inside the API process and keeps one connection, so a single process owns the directory.
+
+Build the index once before the first run:
+
+```bash
+pnpm --filter @research-lab/api rag:ingest
+```
+
+Then start the API and the terminal client in separate terminals:
+
+```bash
+pnpm dev
+pnpm cli
+```
+
+Enter a question to create a project; after completion, enter another message to revise it. Use `/upload path/to/notes.md` to index a document. Changing the embedding provider, model or dimensions invalidates the index, so run `pnpm --filter @research-lab/api rag:reindex` and restart; with PGlite stop the API first, because the data directory is held by a single process.
 
 The API defaults to <http://localhost:3001>. The legacy browser client can be started separately with `pnpm dev:web`.
 
