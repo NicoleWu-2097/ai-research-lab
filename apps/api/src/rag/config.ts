@@ -2,9 +2,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createEmbedder } from "./embedding.js";
-import { postgresDatabase, VectorStore } from "./store.js";
+import { VectorStore } from "./store.js";
 import { RagService } from "./service.js";
-import { readDatabaseConfig } from "./database-config.js";
+import { createDatabase } from "./database.js";
 
 export function createRag(env: NodeJS.ProcessEnv) {
   const config = z
@@ -14,7 +14,7 @@ export function createRag(env: NodeJS.ProcessEnv) {
     })
     .parse(env);
   const embedder = createEmbedder(env);
-  const database = postgresDatabase(readDatabaseConfig(env));
+  const database = createDatabase(env);
   return {
     service: new RagService(
       new VectorStore(database.database),

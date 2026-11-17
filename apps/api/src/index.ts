@@ -2,8 +2,7 @@ import { BraveSearch, DynamicBraveSearch } from "./search/brave.js";
 import { createHash } from "node:crypto";
 import { HumanStore } from "./human/store.js";
 import { HumanService } from "./human/service.js";
-import { postgresDatabase } from "./rag/store.js";
-import { readDatabaseConfig } from "./rag/database-config.js";
+import { createDatabase } from "./rag/database.js";
 import { readAgentEndpoints } from "./a2a/client.js";
 import { serve } from "@hono/node-server";
 import { existsSync } from "node:fs";
@@ -66,7 +65,7 @@ const web =
 if (web && config.HUMAN_ENABLED !== "true")
   throw new Error("Web search requires durable human mode");
 let human: HumanService | null = null;
-let humanDb: ReturnType<typeof postgresDatabase> | null = null;
+let humanDb: ReturnType<typeof createDatabase> | null = null;
 if (config.HUMAN_ENABLED === "true") {
   if (
     !provider ||
@@ -75,11 +74,13 @@ if (config.HUMAN_ENABLED === "true") {
     config.AGENTIC_RAG_ENABLED !== "true"
   )
     throw new Error("Human mode requires a model and the M9 research loop.");
-  humanDb = postgresDatabase(readDatabaseConfig(process.env));
+  humanDb = createDatabase(process.env);
   const store = new HumanStore(humanDb.database, config.APPROVAL_TIMEOUT_MS);
   await store.initialize();
   const keys = [
     "DATABASE_URL",
+    "DATABASE_DRIVER",
+    "PGLITE_DATA_DIR",
     "RAG_DOCUMENT_ROOT",
     "EMBEDDING_PROVIDER",
     "EMBEDDING_MODEL",

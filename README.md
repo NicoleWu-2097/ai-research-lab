@@ -4,7 +4,7 @@ M11 now uses an Ink terminal client with streamed report previews, approval at t
 
 ## Run locally
 
-Requires Node 24, pnpm 11.22.0, and PostgreSQL for project persistence. Configure `apps/api/.env` with `HUMAN_ENABLED=true`, database settings, your model API key and `EMBEDDING_API_KEY` for the embedding service.
+Requires Node 24 and pnpm 11.22.0. Persistence runs on PostgreSQL through `DATABASE_URL`, or inside the API process through PGlite when `DATABASE_DRIVER=pglite` and `PGLITE_DATA_DIR=.pglite`; PGlite keeps a single connection, so one process owns the data directory at a time. Configure `apps/api/.env` with `HUMAN_ENABLED=true`, database settings, your model API key and `EMBEDDING_API_KEY` for the embedding service.
 
 ```bash
 pnpm install
