@@ -8,6 +8,7 @@ export const COMMANDS = [
   "/size",
   "/upload",
   "/report",
+  "/cite",
   "/save",
   "/history",
   "/tools",

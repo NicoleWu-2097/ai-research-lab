@@ -1,4 +1,12 @@
 import { saveReport } from "./save-report.js";
+import {
+  buildEvidenceCard,
+  buildReportBlock,
+  buildSourcesIndex,
+  citationNumber,
+  type FindingLike,
+  type SourceLike,
+} from "./citations.js";
 import { commandSuffix } from "./commands.js";
 import { renderCallLog } from "./call-log.js";
 import type {
@@ -50,7 +58,16 @@ type Task = {
     reason: string;
     kind: string;
   };
-  snapshot?: { next: string; calls: number };
+  snapshot?: {
+    next: string;
+    calls: number;
+    units?: number;
+    retries?: number;
+    state?: {
+      sources?: SourceLike[];
+      analysis?: { findings?: FindingLike[]; unresolved?: string[] };
+    };
+  };
   audit: {
     seq: number | string;
     id?: string;
@@ -148,6 +165,7 @@ const HELP_TEXT = [
   "  /open <序号|ID> 打开指定项目    /delete [序号]   删除项目",
   "  /back           返回项目列表    /size <行数>     调整输入框高度",
   "  /upload <路径>  上传文档(≤24KB) /report          查看当前报告",
+  "  /cite [编号]    来源索引或证据卡（/cite 1 full 看原文全文）",
   "  /save [目录]    保存最新报告为 Markdown（默认启动 CLI 的目录）",
   "  /history        查看历史记录    /tools           展开/收起思考与工具调用详情",
   "  /approval       查看待审批详情  /approve [内容]  批准计划或提交澄清",
@@ -439,7 +457,10 @@ export function App() {
         ) {
           shownReports.current.add(reportKey);
           enqueueStreamingText(
-            `${next.status === "completed" ? "最终报告" : "报告更新"}\n${next.report}`,
+            `${next.status === "completed" ? "最终报告" : "报告更新"}\n${buildReportBlock(
+              next.report,
+              next.snapshot?.state?.sources ?? [],
+            )}`,
           );
         }
       } catch (e) {
@@ -876,6 +897,56 @@ export function App() {
                   ? "\n问题：" + task.approval.question
                   : "")
             : "当前没有待审批事项",
+        );
+        return;
+      }
+      if (text === "/cite" || text.startsWith("/cite ")) {
+        if (!credential) throw new Error("请先打开项目。");
+        const current =
+          task ??
+          ((await request(
+            `/api/research/tasks/${credential.id}`,
+            credential,
+          )) as Task);
+        const sources = current.snapshot?.state?.sources ?? [];
+        if (sources.length === 0) {
+          appendMessageImmediate(
+            "当前任务没有可引用的来源片段（可能未启用本地检索）。",
+          );
+          return;
+        }
+        const arg = text.slice(5).trim();
+        if (!arg || arg === "list") {
+          appendMessageImmediate(buildSourcesIndex(sources));
+          return;
+        }
+        const [rawTarget, mode] = arg.split(/\s+/);
+        const numbered = sources.map((source, index) => ({
+          source,
+          index,
+          number: citationNumber(source, index),
+        }));
+        const target = /^\d+$/.test(rawTarget ?? "")
+          ? numbered.find((item) => item.number === Number(rawTarget))
+          : numbered.find(
+              (item) =>
+                (item.source.documentId ?? "").includes(rawTarget ?? "") ||
+                item.source.id === rawTarget,
+            );
+        if (!target) {
+          appendMessageImmediate(
+            `没有匹配「${rawTarget}」的来源。可用编号：${numbered
+              .map((item) => `[${item.number}]`)
+              .join(" ")}`,
+          );
+          return;
+        }
+        appendMessageImmediate(
+          buildEvidenceCard(
+            target.source,
+            current.snapshot?.state?.analysis?.findings ?? [],
+            { index: target.index, full: mode === "full" },
+          ),
         );
         return;
       }
