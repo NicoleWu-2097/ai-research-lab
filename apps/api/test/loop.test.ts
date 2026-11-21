@@ -136,7 +136,7 @@ it("turns Critic feedback into new research and preserves citation identity", as
   ]);
   expect(test.agents.research).toHaveBeenCalledTimes(2);
 });
-it("continues up to five rounds while unresolved evidence remains", async () => {
+it("stops a repeated retrieval instead of rescuing the same evidence for five rounds", async () => {
   const steps = Array.from({ length: 5 }, (_, i) => [
     plan("local", "query " + i),
     analysis("RAG:1", "one data service", ["缺少性能实测"]),
@@ -147,12 +147,12 @@ it("continues up to five rounds while unresolved evidence remains", async () => 
     Array(5).fill([hit("a")]),
   );
   const report = await test.run();
-  expect(test.local.retrieve).toHaveBeenCalledTimes(5);
+  expect(test.local.retrieve).toHaveBeenCalledTimes(2);
   expect(report).toContain("缺少性能实测");
   expect(test.events).toContainEqual(
     expect.objectContaining({
       type: "RESEARCH_STOPPED",
-      message: "已达到五轮取证上限",
+      message: "本轮没有新增证据，停止补查",
     }),
   );
 });
@@ -164,14 +164,48 @@ it.each([
   expect(await test.run()).toContain("待核验");
   expect(test.deltas).toHaveLength(1);
 });
-it("does not end after an empty or repeated retrieval before five rounds", async () => {
+it("replans once after an empty retrieval and stops on the next miss", async () => {
   const test = fixture(
     Array.from({ length: 5 }, () => plan()),
     [],
     Array(5).fill([]),
   );
-  expect((await test.run()).length).toBeGreaterThan(0);
-  expect(test.local.retrieve).toHaveBeenCalledTimes(5);
+  const report = await test.run();
+  expect(report).toContain("目前没有足够资料形成可核实的事实结论。");
+  expect(report).toContain("已完成检索：local:followup");
+  expect(report).toContain("不能用通用知识补写结论。");
+  expect(report).not.toContain("给出分析建议");
+  expect(test.local.retrieve).toHaveBeenCalledTimes(2);
+  expect(test.events).toContainEqual(
+    expect.objectContaining({
+      type: "RESEARCH_STOPPED",
+      message: "本轮没有新增证据，停止补查",
+    }),
+  );
+});
+it("pulls a drifted open question back to the initial goal", async () => {
+  const test = fixture(
+    [
+      plan(),
+      analysis("RAG:1", "one data service", ["缺少同步成本的证据"]),
+      {
+        ...plan("local", "部署教程"),
+        serves: "如何部署一个新向量库",
+        openQuestions: ["如何部署一个新向量库"],
+      },
+    ],
+    [revise],
+    [[hit("a")], [hit("a")]],
+  );
+  await test.run();
+  expect(test.events).toContainEqual(
+    expect.objectContaining({
+      type: "LOOP_PLAN",
+      message: expect.stringContaining("查询已拉回未决问题"),
+    }),
+  );
+  expect(test.prompts[0]).toContain("初始目标（不可自行改写）");
+  expect(test.local.retrieve).toHaveBeenCalledTimes(2);
 });
 it("stops before spending more calls or reservation units than authorized", async () => {
   for (const budget of [new ResearchBudget(1), new ResearchBudget(12, 1)]) {
@@ -211,6 +245,21 @@ it("permits one transient nonstreaming retry and never retries invalid output", 
   );
   expect(twice.prompts).toHaveLength(2);
 });
+it("replaces an uncited draft with the retrieved excerpt", async () => {
+  const test = fixture([plan()]);
+  test.agents.research = vi.fn(async () => "提高性能，简化数据管理。");
+  const report = await test.run();
+  expect(report).toContain("草稿没有有效引用");
+  expect(report).toContain("one data service");
+  expect(report).not.toContain("提高性能");
+  expect(test.events).toContainEqual(
+    expect.objectContaining({
+      type: "CITATIONS_UNVERIFIED",
+      message: "草稿没有有效引用，已改为列出原文片段。",
+    }),
+  );
+});
+
 it("skips retrieval and Critic on a direct greeting", async () => {
   const test = fixture([plan("direct")]);
   expect(await test.run()).toContain("未检索");
@@ -235,6 +284,44 @@ it("does not turn tool failures or inconsistent reviews into sufficient evidence
       type: "RESEARCH_STOPPED",
       code: "review_format",
     }),
+  );
+});
+it("reads local Markdown when vector retrieval fails", async () => {
+  const test = fixture([plan(), analysis()]);
+  test.local.retrieve.mockRejectedValueOnce(
+    new Error('extension "vector" is not available'),
+  );
+  const source = {
+    id: "0003-storage.md",
+    content: "PostgreSQL and pgvector keep one data service.",
+    sha256: "a".repeat(64),
+    retrievedAt: new Date().toISOString(),
+  };
+  const tools = { collect: vi.fn(async () => [source]) };
+  const report = await runResearchLoop(
+    "为什么选择 PostgreSQL 和 pgvector？",
+    test.provider,
+    new AbortController().signal,
+    async (text) => {
+      test.deltas.push(text);
+    },
+    test.local,
+    tools,
+    async (type, data) => {
+      test.events.push({ type, ...data });
+    },
+    test.agents,
+  );
+  expect(tools.collect).toHaveBeenCalledOnce();
+  expect(report).toContain("[RAG:1] 原文：“one data service”");
+  expect(test.events).toContainEqual(
+    expect.objectContaining({
+      type: "RETRIEVAL_FAILED",
+      action: "local",
+    }),
+  );
+  expect(test.events).not.toContainEqual(
+    expect.objectContaining({ type: "RESEARCH_STOPPED", code: "tool_error" }),
   );
 });
 it("cancels stalled remote analysis and times out an HTTP plan", async () => {
@@ -424,7 +511,37 @@ it("lists actual web source URLs in the final report", async () => {
   expect(report).toContain("[RAG:1] 研究原文 — <https://example.com/research>");
 });
 
-it("allows five web searches when evidence gaps persist", async () => {
+it("searches the web when the user asked for it and the plan is invalid", async () => {
+  const test = fixture([
+    new ModelError("MODEL_INVALID_OUTPUT", "bad plan"),
+    analysis(),
+  ]);
+  const web = {
+    retrieve: vi.fn(async () => [
+      { ...hit("nobel"), url: "https://example.com/nobel", title: "物理学奖" },
+    ]),
+  };
+  const report = await runResearchLoop(
+    "请联网搜索：2024 年诺贝尔物理学奖发给了谁",
+    test.provider,
+    new AbortController().signal,
+    async () => {},
+    null,
+    null,
+    async () => {},
+    test.agents,
+    new ResearchBudget(),
+    undefined,
+    web,
+  );
+  expect(web.retrieve).toHaveBeenCalledWith(
+    "2024 年诺贝尔物理学奖发给了谁",
+    expect.any(AbortSignal),
+  );
+  expect(report).toContain("https://example.com/nobel");
+});
+
+it("stops a repeated web search when no new page is added", async () => {
   const test = fixture(
     Array.from({ length: 5 }, (_, i) => [
       plan("web", `evidence ${i}`),
@@ -451,7 +568,7 @@ it("allows five web searches when evidence gaps persist", async () => {
     undefined,
     web,
   );
-  expect(web.retrieve).toHaveBeenCalledTimes(5);
+  expect(web.retrieve).toHaveBeenCalledTimes(2);
   expect(report).toContain("https://example.com/source");
   expect(budget.calls).toBeLessThanOrEqual(28);
 });

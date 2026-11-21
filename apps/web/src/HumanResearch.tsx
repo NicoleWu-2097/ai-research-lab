@@ -23,6 +23,8 @@ interface Task {
     questions: string[];
     reason: string;
     expiresAt: string;
+    goal?: string;
+    serves?: string;
   } | null;
   snapshot?: {
     next?: string;
@@ -340,7 +342,9 @@ export function HumanResearch() {
           <div className="terminal-welcome">
             <p>项目列表（共 {projects.length} 个项目）</p>
             {projects.length === 0 ? (
-              <p>暂无项目，在下方直接输入问题新建项目，或输入 /help 查看帮助。</p>
+              <p>
+                暂无项目，在下方直接输入问题新建项目，或输入 /help 查看帮助。
+              </p>
             ) : (
               <ul>
                 {projects.map((p, index) => (
@@ -490,6 +494,8 @@ export function HumanResearch() {
               }
             </h3>
             <p>{task.approval.reason}</p>
+            {task.approval.goal && <p>初始目标：{task.approval.goal}</p>}
+            {task.approval.serves && <p>这一跳回答：{task.approval.serves}</p>}
             <ul>
               {task.approval.questions.map((q) => (
                 <li key={q}>{q}</li>

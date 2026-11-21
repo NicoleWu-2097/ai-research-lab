@@ -9,6 +9,7 @@ import {
 } from "./documents.js";
 import { raceWithAbort } from "../model/deadline.js";
 import { ModelError, type ModelProvider } from "../model/types.js";
+import { tokenizeText } from "../rag/hybrid.js";
 
 export type ToolEventSink = (
   type: string,
@@ -23,6 +24,53 @@ export interface ResearchTools {
     emit: ToolEventSink,
   ): Promise<DocumentSource[]>;
 }
+const LOCAL_DECISION_QUESTION =
+  /决策|decisions|\badr\b|postgres|postgresql|pgvector|向量|storage/i;
+
+/** 模型选 none 时，本地决策问题仍要读最匹配的文件，不能把目录里的原文留在外面。 */
+export function fallbackDocument(
+  question: string,
+  documents: readonly string[],
+): string | null {
+  if (!LOCAL_DECISION_QUESTION.test(question) || documents.length === 0)
+    return null;
+  const ask = question.toLowerCase();
+  const score = (id: string) => {
+    const name = id.toLowerCase();
+    let points = 0;
+    if (/pgvector|向量/.test(ask) && /0003|storage|vector/.test(name))
+      points += 5;
+    if (/postgres/.test(ask) && /0003|storage|postgres/.test(name)) points += 3;
+    if (/决策|decisions|\badr\b/.test(ask) && /000\d|decision|storage/.test(name))
+      points += 1;
+    return points;
+  };
+  const ranked = [...documents].sort(
+    (left, right) => score(right) - score(left) || left.localeCompare(right),
+  );
+  const best = ranked[0];
+  if (!best || score(best) === 0) {
+    return documents.find((id) => /0003|storage/i.test(id)) ?? documents[0]!;
+  }
+  return best;
+}
+
+/** 用问题与正文的重合词选文件。模型点中的文件名不能压过更高的正文分数。 */
+export function bestDocumentByContent(
+  question: string,
+  documents: readonly { id: string; content: string }[],
+): { id: string; score: number } | null {
+  const query = new Set(tokenizeText(question));
+  let best: { id: string; score: number } | null = null;
+  for (const document of documents) {
+    const tokens = tokenizeText(`${document.id} ${document.content}`);
+    let score = 0;
+    for (const token of tokens) if (query.has(token)) score += 1;
+    if (!best || score > best.score) best = { id: document.id, score };
+  }
+  return best && best.score > 0 ? best : null;
+}
+
 export class McpToolError extends Error {
   readonly code = "MCP_TOOL_FAILED";
   constructor() {
@@ -105,6 +153,20 @@ export class McpDocumentTools implements ResearchTools {
         message: `可用资料：${documents.length} 份`,
       });
       if (documents.length === 0) return [];
+      const loaded = [];
+      for (const id of documents) {
+        const source = sourceSchema.parse(
+          await call("read_document", { id }),
+        );
+        if (source.id !== id) continue;
+        loaded.push(source);
+        await emit("TOOL_RESULT", {
+          tool: "read_document",
+          documentId: source.id,
+          sha256: source.sha256,
+          message: `读取成功：${source.id}（${source.content.length} 字符）`,
+        });
+      }
       const schema = z.object({ documentId: z.enum(["none", ...documents]) });
       const selection = await raceWithAbort(
         provider.structuredOutput(
@@ -119,20 +181,35 @@ export class McpDocumentTools implements ResearchTools {
         signal,
       );
       const choice = schema.parse(selection);
-      if (choice.documentId === "none") {
+      const byContent = bestDocumentByContent(question, loaded);
+      const filenameFallback =
+        choice.documentId === "none"
+          ? fallbackDocument(question, documents)
+          : null;
+      const documentId =
+        byContent &&
+        (choice.documentId === "none" || choice.documentId !== byContent.id)
+          ? byContent.id
+          : (filenameFallback ?? choice.documentId);
+      if (documentId === "none") {
         await emit("TOOL_SKIPPED", { message: "未选择相关文档。" });
         return [];
       }
-      const source = sourceSchema.parse(
-        await call("read_document", { id: choice.documentId }),
-      );
-      if (source.id !== choice.documentId) throw new McpToolError();
-      await emit("TOOL_RESULT", {
-        tool: "read_document",
-        documentId: source.id,
-        sha256: source.sha256,
-        message: `读取成功：${source.id}（${source.content.length} 字符）`,
-      });
+      if (byContent && documentId === byContent.id && choice.documentId !== byContent.id) {
+        await emit("TOOL_RESULT", {
+          tool: "list_documents",
+          documentId,
+          message: `模型选择 ${choice.documentId}，正文更匹配 ${documentId}，改为读取正文匹配的文档。`,
+        });
+      } else if (filenameFallback) {
+        await emit("TOOL_RESULT", {
+          tool: "list_documents",
+          documentId: filenameFallback,
+          message: `模型未选择文档，按问题改为读取：${filenameFallback}`,
+        });
+      }
+      const source = loaded.find((item) => item.id === documentId);
+      if (!source) throw new McpToolError();
       return [source];
     } catch (error) {
       if (signal.aborted) throw signal.reason;

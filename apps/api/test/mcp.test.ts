@@ -21,7 +21,11 @@ beforeEach(async () => {
     "# Storage\nPostgreSQL keeps task records and vectors together.",
   );
   await writeFile(join(directory, "secret.md"), "private sentinel");
-  await symlink(join(directory, "secret.md"), join(root, "linked.md"));
+  try {
+    await symlink(join(directory, "secret.md"), join(root, "linked.md"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+  }
 });
 afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
@@ -116,6 +120,78 @@ describe("real MCP stdio integration", () => {
     ]);
   });
 
+  it("reads the storage decision when the model selects none for a local decision question", async () => {
+    await writeFile(
+      join(root, "0003-storage-and-protocol-boundaries.md"),
+      "# ADR 0003\npgvector 支持向量检索并能结合 PostgreSQL 全文检索，初期只运行一套数据服务。",
+    );
+    const provider: ModelProvider = {
+      provider: "ollama",
+      model: "fake",
+      async generate() {
+        throw new Error("unused");
+      },
+      async structuredOutput(_prompt, schema) {
+        return schema.parse({ documentId: "none" });
+      },
+      async *stream() {
+        yield "unused";
+      },
+    };
+    const calls: string[] = [];
+    const result = await new McpDocumentTools(root).collect(
+      "依据 docs/decisions 列出选择 PostgreSQL 和 pgvector 的两条理由",
+      provider,
+      AbortSignal.timeout(5000),
+      async (type) => {
+        calls.push(type);
+      },
+    );
+    expect(result.map((source) => source.id)).toEqual([
+      "0003-storage-and-protocol-boundaries.md",
+    ]);
+    expect(result[0]?.content).toContain("初期只运行一套数据服务");
+    expect(calls).not.toContain("TOOL_SKIPPED");
+    expect(calls.filter((type) => type === "TOOL_CALLED").length).toBeGreaterThan(1);
+  });
+
+  it("prefers the document whose text matches when the model names another file", async () => {
+    await writeFile(
+      join(root, "0002-model-boundary.md"),
+      "M2 定义应用需要的生成、流式输出和官方客户端。",
+    );
+    await writeFile(
+      join(root, "0003-storage-and-protocol-boundaries.md"),
+      "任务和事件持久化留到 M9。pgvector 存来源片段和向量，初期只运行一套数据服务。",
+    );
+    const provider: ModelProvider = {
+      provider: "ollama",
+      model: "fake",
+      async generate() {
+        throw new Error("unused");
+      },
+      async structuredOutput(_prompt, schema) {
+        return schema.parse({ documentId: "0002-model-boundary.md" });
+      },
+      async *stream() {
+        yield "unused";
+      },
+    };
+    const messages: string[] = [];
+    const result = await new McpDocumentTools(root).collect(
+      "为什么这个项目把任务和向量放在同一个数据库？",
+      provider,
+      AbortSignal.timeout(5000),
+      async (_type, payload) => {
+        if (typeof payload.message === "string") messages.push(payload.message);
+      },
+    );
+    expect(result.map((source) => source.id)).toEqual([
+      "0003-storage-and-protocol-boundaries.md",
+    ]);
+    expect(messages.join("\n")).toContain("正文更匹配");
+  });
+
   it("skips reading when the model selects none", async () => {
     const provider: ModelProvider = {
       provider: "ollama",
@@ -141,7 +217,7 @@ describe("real MCP stdio integration", () => {
     );
     expect(result).toEqual([]);
     expect(calls).toContain("TOOL_SKIPPED");
-    expect(calls.filter((type) => type === "TOOL_CALLED")).toHaveLength(1);
+    expect(calls.filter((type) => type === "TOOL_CALLED")).toHaveLength(2);
   });
 
   it("fails explicitly for an unavailable directory", async () => {

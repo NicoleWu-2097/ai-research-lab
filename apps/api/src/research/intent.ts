@@ -6,6 +6,13 @@ const schema = z.object({
   goal: z.string().trim().min(1).max(2000),
   clarification: z.string().trim().max(1000),
 });
+/** 只改表述、不索要新事实时才允许走不检索的改写。 */
+export function pureRewrite(message: string) {
+  return (
+    /总结|缩成|改成|表格|rewrite|reformat|缩短|精简/.test(message) &&
+    !/实现|性能|步骤|部署|代码|数字|进度|实测|迁移|替换|向量库/.test(message)
+  );
+}
 export async function classifyMessage(
   model: ModelProvider,
   signal: AbortSignal,

@@ -26,9 +26,11 @@ import { resolve } from "node:path";
 
 export class RagError extends Error {
   readonly code = "RAG_FAILED";
-  constructor() {
+  constructor(detail?: string) {
     super(
-      "Local retrieval failed. Check RAG health, then run pnpm --filter @research-lab/api rag:reindex.",
+      detail
+        ? `Local retrieval failed: ${detail}`
+        : "Local retrieval failed. Check RAG health, then run pnpm --filter @research-lab/api rag:reindex.",
     );
   }
 }
@@ -298,9 +300,10 @@ export class RagService implements ResearchTools {
         degraded: true,
         ...(degradedReason ? { degradedReason } : {}),
       };
-    } catch {
+    } catch (error) {
       if (signal.aborted) throw signal.reason;
-      throw new RagError();
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new RagError(detail);
     }
   }
 
@@ -482,9 +485,10 @@ export class RagService implements ResearchTools {
             }
           : {}),
       };
-    } catch {
+    } catch (error) {
       if (signal.aborted) throw signal.reason;
-      throw new RagError();
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new RagError(detail);
     }
   }
 
