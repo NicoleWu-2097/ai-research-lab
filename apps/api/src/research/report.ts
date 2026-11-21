@@ -32,9 +32,15 @@ export function stopReason(error: unknown, node?: string): StopReason {
       return { code: "review_format", message: "模型输出或引用校验未通过。" };
     return { code: "model_error", message: "模型服务调用失败。" };
   }
+  const detail = error instanceof Error ? error.message.trim() : "";
   return {
     code: node === "research" ? "tool_error" : "model_error",
-    message: node === "research" ? "检索工具调用失败。" : "研究执行未完成。",
+    message:
+      node === "research"
+        ? detail
+          ? `检索工具调用失败。${detail}`
+          : "检索工具调用失败。"
+        : "研究执行未完成。",
   };
 }
 export function plannedStop(message: string): StopReason {

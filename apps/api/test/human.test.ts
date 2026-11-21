@@ -90,6 +90,9 @@ it("pauses before retrieval and resumes the approved snapshot without repeating 
   let task = await run(f.service(), created.task.id, created.key);
   expect(task.status).toBe("pending");
   expect(task.approval?.kind).toBe("plan");
+  expect(task.approval?.goal).toBe("original");
+  expect(task.approval?.serves).toBe("为什么单库？");
+  expect(task.approval?.reason).toContain("这一跳回答：为什么单库？");
   expect(f.local.retrieve).not.toHaveBeenCalled();
   await store.decide(
     task.id,

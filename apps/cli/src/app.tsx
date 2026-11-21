@@ -49,6 +49,8 @@ type Task = {
     questions?: string[];
     reason: string;
     kind: string;
+    goal?: string;
+    serves?: string;
   };
   snapshot?: { next: string; calls: number };
   audit: {
@@ -871,6 +873,12 @@ export function App() {
                 task.approval.query !== task.approval.reason
                   ? "\n查询：" + task.approval.query
                   : "") +
+                (task.approval.goal
+                  ? "\n初始目标：" + task.approval.goal
+                  : "") +
+                (task.approval.serves
+                  ? "\n这一跳回答：" + task.approval.serves
+                  : "") +
                 (task.approval.question &&
                 task.approval.question !== task.approval.reason
                   ? "\n问题：" + task.approval.question
@@ -1013,11 +1021,25 @@ export function App() {
           { hard: true },
         )
       : "";
+  const approvalGoalWrapped = task?.approval?.goal
+    ? wrapAnsi(
+        stripVTControlCharacters(`初始目标：${task.approval.goal}`),
+        innerWidth,
+        { hard: true },
+      )
+    : "";
+  const approvalServesWrapped = task?.approval?.serves
+    ? wrapAnsi(
+        stripVTControlCharacters(`这一跳回答：${task.approval.serves}`),
+        innerWidth,
+        { hard: true },
+      )
+    : "";
   const approvalQuestionsWrapped =
     task?.approval?.questions && task.approval.questions.length > 0
       ? wrapAnsi(
           stripVTControlCharacters(
-            `子问题：${task.approval.questions.join("；")}`,
+            `未决问题：${task.approval.questions.join("；")}`,
           ),
           innerWidth,
           { hard: true },
@@ -1041,6 +1063,8 @@ export function App() {
   const approvalLineCount =
     task?.approval && task.status === "pending"
       ? (approvalReasonWrapped ? approvalReasonWrapped.split("\n").length : 0) +
+        (approvalGoalWrapped ? approvalGoalWrapped.split("\n").length : 0) +
+        (approvalServesWrapped ? approvalServesWrapped.split("\n").length : 0) +
         (approvalTargetWrapped ? approvalTargetWrapped.split("\n").length : 0) +
         (approvalQuestionsWrapped
           ? approvalQuestionsWrapped.split("\n").length
@@ -1251,6 +1275,16 @@ export function App() {
             <Text color="yellow" wrap="wrap">
               {approvalReasonWrapped}
             </Text>
+            {approvalGoalWrapped !== "" && (
+              <Text color="yellow" wrap="wrap">
+                {approvalGoalWrapped}
+              </Text>
+            )}
+            {approvalServesWrapped !== "" && (
+              <Text color="yellow" wrap="wrap">
+                {approvalServesWrapped}
+              </Text>
+            )}
             {approvalTargetWrapped !== "" && (
               <Text color="yellow" wrap="wrap">
                 {approvalTargetWrapped}

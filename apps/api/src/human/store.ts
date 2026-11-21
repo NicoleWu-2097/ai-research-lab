@@ -27,6 +27,8 @@ export interface Approval {
   questions: string[];
   reason: string;
   expiresAt: string;
+  goal?: string;
+  serves?: string;
 }
 export interface HumanTask {
   id: string;
@@ -85,9 +87,7 @@ function normalizeTask(task: HumanTask): HumanTask {
     task.turn.report.quality = "unreviewed";
     task.turn.report.revision = 1;
   }
-  task.title ??= summarizeTitle(
-    task.history?.[0]?.question ?? task.question,
-  );
+  task.title ??= summarizeTitle(task.history?.[0]?.question ?? task.question);
   return task;
 }
 export interface AuditEvent extends Record<string, unknown> {
