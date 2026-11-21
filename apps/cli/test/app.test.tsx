@@ -4,6 +4,18 @@ import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// vitest 里 ink 的 yoga-layout 会通过 fetch 去取 wasm 二进制。测试如果无条件
+// 替换全局 fetch 返回 API JSON，wasm 就被换成一坨 JSON，ink 渲染直接 Abort
+// （CompileError: expected magic word 00 61 73 6d）。所以只拦截 /api/ 请求，
+// 其余请求（wasm、data: URI 等）交回真实 fetch。
+const realFetch = globalThis.fetch.bind(globalThis);
+function passThrough(input: unknown, options?: RequestInit) {
+  return realFetch(input as RequestInfo, options);
+}
+function isApi(url: string) {
+  return url.includes("/api/");
+}
+
 it("keeps approval at the prompt, shows call summaries, and follows up in the same project", async () => {
   const directory = await mkdtemp(join(tmpdir(), "research-cli-"));
   vi.stubEnv("RESEARCH_HOME", directory);
@@ -23,8 +35,8 @@ it("keeps approval at the prompt, shows call summaries, and follows up in the sa
     audit: [{ seq: 1, action: "SECRET_TOOL_DETAIL" }],
   };
   const fetcher = vi.fn(async (input: unknown, _options?: RequestInit) => {
-    void _options;
     const url = String(input);
+    if (!isApi(url)) return passThrough(input, _options);
     if (url.endsWith("/api/research/tasks"))
       return Response.json({ id, key: "test-only" });
     if (url.endsWith("/approve")) {
@@ -121,6 +133,7 @@ it("navigates project list and 3-option approval selector with j/h + Enter, and 
 
   const fetcher = vi.fn(async (input: unknown, options?: RequestInit) => {
     const url = String(input);
+    if (!isApi(url)) return passThrough(input, options);
     if (options?.method === "DELETE") {
       return Response.json({ deleted: true });
     }
@@ -252,8 +265,9 @@ it("scrolls long reports inside the isolated viewport via mouse wheel without tr
     JSON.stringify({ id, key: "key-scroll", title: "长篇报告滚动测试" }),
   );
 
-  const fetcher = vi.fn(async () =>
-    Response.json({
+  const fetcher = vi.fn(async (input: unknown, options?: RequestInit) => {
+    if (!isApi(String(input))) return passThrough(input, options);
+    return Response.json({
       id,
       title: "长篇报告滚动测试",
       status: "completed",
@@ -262,8 +276,8 @@ it("scrolls long reports inside the isolated viewport via mouse wheel without tr
       error: "",
       approval: null,
       audit: [{ seq: 1, action: "LOOP_COMPLETED" }],
-    }),
-  );
+    });
+  });
   vi.stubGlobal("fetch", fetcher);
 
   const { App } = await import("../src/app.js");
@@ -320,8 +334,9 @@ it("clears the home screen, completes commands with Tab and reopens without star
     join(directory, id + ".json"),
     JSON.stringify({ id, key: "test", title: "demo" }),
   );
-  const fetcher = vi.fn(async () =>
-    Response.json({
+  const fetcher = vi.fn(async (input: unknown, options?: RequestInit) => {
+    if (!isApi(String(input))) return passThrough(input, options);
+    return Response.json({
       id,
       status: "completed",
       question: "topic",
@@ -329,8 +344,8 @@ it("clears the home screen, completes commands with Tab and reopens without star
       error: "",
       approval: null,
       audit: [],
-    }),
-  );
+    });
+  });
   vi.stubGlobal("fetch", fetcher);
   const { App } = await import("../src/app.js");
   const ui = render(<App />);
