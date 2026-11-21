@@ -1,3 +1,4 @@
+import { nextEvidence } from "./continuation.js";
 import { savedReport } from "../research/report.js";
 import {
   newTurn,
@@ -280,10 +281,35 @@ export class HumanStore {
       return task;
     });
   }
-  async followup(id: string, key: string, question: string, actor: string) {
+  async followup(
+    id: string,
+    key: string,
+    question: string,
+    actor: string,
+    continuation = false,
+  ) {
     return this.change(id, key, (task) => {
       if (["running", "pending", "queued", "ready"].includes(task.status))
         throw new HumanConflict("请先完成当前轮次。");
+      if (continuation) {
+        if (!task.report.trim())
+          throw new HumanConflict("当前轮次没有报告，请先完成一次研究。");
+        const evidence =
+          nextEvidence(task.report) ||
+          task.snapshot?.state.analysis.unresolved.join("；") ||
+          task.snapshot?.state.issues.join("；") ||
+          "";
+        if (!evidence.trim())
+          throw new HumanConflict(
+            "上一轮报告没有下一步所需证据，请直接输入要补充研究的问题。",
+          );
+        question = [
+          "继续科研：围绕上一轮所需证据开展新的检索并生成新报告，不要只改写或总结旧报告。",
+          `原始课题：${(task.history?.[0]?.question ?? task.question).slice(0, 600)}`,
+          `上一轮下一步所需证据（仅作检索线索，尚未经核验）：\n${evidence.slice(0, 4000)}`,
+          `用户补充指令：${question || "无，请优先补齐上述证据缺口。"}`,
+        ].join("\n\n");
+      }
       const previous = {
         turn: structuredClone(task.turn),
         question: task.question,
@@ -303,6 +329,7 @@ export class HumanStore {
           ? task.turn.report.revision
           : task.turn.basedOnReportRevision,
       );
+      task.turn.continuation = continuation;
       task.question = question;
       task.snapshot = null;
       task.report = "";

@@ -6,6 +6,7 @@ export type ReportQuality =
 export type ContentKind =
   "user_message" | "status" | "approval" | "tool" | "rag" | "report";
 export interface TurnMetadata {
+  continuation?: boolean;
   stop?: StopReason;
   routing?: {
     phase: "ready" | "inflight";

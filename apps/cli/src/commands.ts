@@ -16,6 +16,7 @@ export const COMMANDS = [
   "/approve",
   "/reject",
   "/resume",
+  "/continue",
   "/help",
   "/quit",
 ];

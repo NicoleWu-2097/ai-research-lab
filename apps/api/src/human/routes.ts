@@ -131,6 +131,18 @@ export function humanRoutes(service: HumanService) {
       if (action === "approve") await service.start(id, key);
       return c.json({ ok: true });
     });
+  routes.post("/:id/continue", async (c) => {
+    const { id, key } = credentials(
+      c.req.param("id"),
+      c.req.header("x-research-key"),
+    );
+    const body = z
+      .object({ actor, instructions: z.string().trim().max(2000).default("") })
+      .parse(await c.req.json());
+    await service.store.followup(id, key, body.instructions, body.actor, true);
+    await service.start(id, key);
+    return c.json({ ok: true });
+  });
   routes.post("/:id/followup", async (c) => {
     const { id, key } = credentials(
       c.req.param("id"),
