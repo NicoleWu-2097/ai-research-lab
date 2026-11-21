@@ -171,6 +171,7 @@ const HELP_TEXT = [
   "  /save [目录]    保存最新报告为 Markdown（默认启动 CLI 的目录）",
   "  /history        查看历史记录    /tools           展开/收起思考与工具调用详情",
   "  /approval       查看待审批详情  /approve [内容]  批准计划或提交澄清",
+  "  /continue [指令] 根据上一轮所需证据继续科研（指令可选）",
   "  /reject         拒绝当前计划    /resume          恢复中断的任务",
   "  /help           显示本帮助信息  /quit            退出 CLI",
 ].join("\n");
@@ -190,6 +191,20 @@ async function request(
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
+  if (
+    !response.ok &&
+    response.status === 404 &&
+    path === "/api/research/tasks"
+  ) {
+    throw new Error(
+      "研究任务接口不可用：请在 apps/api/.env 设置 HUMAN_ENABLED=true 并重启 API。",
+    );
+  }
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    throw new Error(
+      `API 返回了非 JSON 响应（HTTP ${response.status}），请检查 API 地址及服务配置。`,
+    );
+  }
   const data = await response.json();
   if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
   return data;
@@ -905,6 +920,21 @@ export function App() {
                   ? "\n问题：" + task.approval.question
                   : "")
             : "当前没有待审批事项",
+        );
+        return;
+      }
+      if (text === "/continue" || text.startsWith("/continue ")) {
+        if (!credential) throw new Error("请先打开有报告的项目。");
+        await request(
+          `/api/research/tasks/${credential.id}/continue`,
+          credential,
+          {
+            instructions: text.slice("/continue".length).trim(),
+            actor: "CLI",
+          },
+        );
+        appendMessageImmediate(
+          `❯ ${text}\n已根据上一轮所需证据启动新一轮研究。`,
         );
         return;
       }

@@ -738,3 +738,131 @@ it("returns a persisted report without running tools after rejection", async () 
   expect(f.local.retrieve).not.toHaveBeenCalled();
   expect((await store.read(task.id, created.key)).report).toBe(task.report);
 });
+
+it("pauses for MCP approval after local failure and resumes without retrying local", async () => {
+  const f = fixture();
+  f.local.retrieve.mockRejectedValueOnce(new Error("database unavailable"));
+  const created = await store.create("original", "Alice", false, "config-v1");
+  let task = await run(f.service(), created.task.id, created.key);
+  await store.decide(task.id, created.key, task.approval!.id, "Alice", true);
+  task = await run(f.service(), task.id, created.key);
+  expect(task.status).toBe("pending");
+  expect(task.approval?.kind).toBe("tool");
+  expect(task.snapshot?.state.plan.action).toBe("mcp");
+  expect(task.snapshot?.next).toBe("research");
+  expect(task.snapshot?.state.localCalls).toBe(1);
+  expect(task.snapshot?.state.mcpCalls).toBe(0);
+  expect(f.tools.collect).not.toHaveBeenCalled();
+  await store.decide(
+    task.id,
+    created.key,
+    task.approval!.id,
+    "Alice",
+    true,
+    "approved MCP query",
+  );
+  // A new service instance uses the durable snapshot, including its budget.
+  task = await run(f.service(), task.id, created.key);
+  expect(task.status).toBe("completed");
+  expect(f.local.retrieve).toHaveBeenCalledTimes(1);
+  expect(f.tools.collect).toHaveBeenCalledTimes(1);
+  expect(f.tools.collect).toHaveBeenCalledWith(
+    "approved MCP query",
+    expect.anything(),
+    expect.any(AbortSignal),
+    expect.any(Function),
+  );
+  expect(task.snapshot?.state.mcpCalls).toBe(1);
+});
+
+it("never reads MCP documents when fallback approval is rejected", async () => {
+  const f = fixture();
+  f.local.retrieve.mockRejectedValueOnce(new Error("database unavailable"));
+  const created = await store.create("original", "Alice", false, "config-v1");
+  let task = await run(f.service(), created.task.id, created.key);
+  await store.decide(task.id, created.key, task.approval!.id, "Alice", true);
+  task = await run(f.service(), task.id, created.key);
+  await store.decide(task.id, created.key, task.approval!.id, "Alice", false);
+  await expect(f.service().start(task.id, created.key)).rejects.toThrow();
+  expect(f.tools.collect).not.toHaveBeenCalled();
+});
+
+it.each(["", "优先找近三年的对照实验"])(
+  "continues from report evidence with optional instructions: %s",
+  async (instructions) => {
+    const f = fixture();
+    const created = await store.create("原始课题", "Alice", false, "config-v1");
+    await store.change(created.task.id, created.key, (task) => {
+      task.status = "completed";
+      task.report =
+        "## 下一步所需证据\n- 独立测量同步成本\n## 其他\n不要作为搜索项";
+      return { actor: "test", action: "completed", detail: {} };
+    });
+    const service = f.service();
+    const original = f.provider.structuredOutput.bind(f.provider);
+    f.provider.structuredOutput = async (prompt, schema, signal) => {
+      if (prompt.includes("Classify the next step"))
+        return schema.parse({
+          action: instructions ? "local" : "direct",
+          query: "独立测量同步成本",
+          questions: ["同步成本的独立证据是什么？"],
+          reason: "补齐所需证据",
+        });
+      return original(prompt, schema, signal);
+    };
+    const app = humanRoutes(service);
+    const response = await app.request(`/${created.task.id}/continue`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-research-key": created.key,
+      },
+      body: JSON.stringify({ actor: "Alice", instructions }),
+    });
+    expect(response.status).toBe(200);
+    await service.active.get(created.task.id);
+    let task = await store.read(created.task.id, created.key);
+    expect(task.turn.continuation).toBe(true);
+    expect(task.turn.intent).toBe("research");
+    expect(task.turn.goal).toContain("独立测量同步成本");
+    expect(task.turn.goal).not.toContain("不要作为搜索项");
+    if (instructions) expect(task.turn.goal).toContain(instructions);
+    expect(task.history).toHaveLength(1);
+    expect(task.status).toBe("pending");
+    expect(f.calls.intent).toBe(0);
+    expect(f.local.retrieve).not.toHaveBeenCalled();
+    await store.decide(task.id, created.key, task.approval!.id, "Alice", true);
+    task = await run(f.service(), task.id, created.key);
+    expect(task.status).toBe("completed");
+    expect(task.report).toContain("原文");
+    await store.change(task.id, created.key, (task) => {
+      task.report = "## 下一步所需证据\n- 新一轮复现实验";
+      return { actor: "test", action: "completed", detail: {} };
+    });
+    await store.followup(task.id, created.key, "", "Alice", true);
+    const next = await store.read(task.id, created.key);
+    expect(next.turn.message).toContain("新一轮复现实验");
+    expect(next.turn.message).not.toContain("独立测量同步成本");
+    expect(next.history).toHaveLength(2);
+  },
+);
+
+it("rejects continue without a report or while a turn is unfinished", async () => {
+  const { task, key } = await store.create(
+    "topic",
+    "Alice",
+    false,
+    "config-v1",
+  );
+  await expect(store.followup(task.id, key, "", "Alice", true)).rejects.toThrow(
+    "完成当前轮次",
+  );
+  await store.change(task.id, key, (task) => {
+    task.status = "completed";
+    return { actor: "test", action: "completed", detail: {} };
+  });
+  await expect(store.followup(task.id, key, "", "Alice", true)).rejects.toThrow(
+    "没有报告",
+  );
+  expect((await store.read(task.id, key)).history ?? []).toHaveLength(0);
+});

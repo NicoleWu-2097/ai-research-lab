@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import { commandSuffix } from "../src/commands.js";
 it("completes only command prefixes, leaving arguments and normal messages untouched", () => {
+  expect(commandSuffix("/cont")).toBe("inue");
+  expect(commandSuffix("/continue")).toBe("");
   expect(commandSuffix("/op")).toBe("en");
   expect(commandSuffix("/open")).toBe("");
   expect(commandSuffix("/open pr")).toBe("");

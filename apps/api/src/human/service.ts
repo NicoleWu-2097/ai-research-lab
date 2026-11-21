@@ -80,6 +80,7 @@ export class HumanService {
     // 末尾 catch 防止持久化失败等未捕获异常变成未处理的 Promise 拒绝。
     const latestMsg = task.turn.goal ?? task.turn.message ?? task.question;
     const isContinuation =
+      task.turn.continuation ||
       /继续|刚才|补充|缩成|改成|修改|总结|short|revise|continue|more|followup/i.test(
         latestMsg,
       );
@@ -216,19 +217,21 @@ export class HumanService {
         await update((task) => {
           task.turn.routing = routingState("inflight");
         }, "intent_started");
-        const decision = await classifyMessage(
-          budget.wrap(this.provider),
-          deadline.signal,
-          {
-            message: initial.turn.message,
-            clarification: initial.turn.goal,
-            history: initial.history?.slice(-3).map((turn) => ({
-              message: turn.turn.message,
-              goal: turn.turn.goal,
-            })),
-            report: latest?.report.slice(0, 20000) ?? "",
-          },
-        );
+        const decision = initial.turn.continuation
+          ? {
+              intent: "research" as const,
+              goal: initial.turn.message,
+              clarification: "",
+            }
+          : await classifyMessage(budget.wrap(this.provider), deadline.signal, {
+              message: initial.turn.message,
+              clarification: initial.turn.goal,
+              history: initial.history?.slice(-3).map((turn) => ({
+                message: turn.turn.message,
+                goal: turn.turn.goal,
+              })),
+              report: latest?.report.slice(0, 20000) ?? "",
+            });
         const previousGoal = initial.history?.[0]?.question;
         const continuing =
           Boolean(previousGoal) &&
@@ -236,7 +239,11 @@ export class HumanService {
             initial.turn.message,
           );
         // 续写却索要新事实时，不走无检索改写，目标保持项目第一问。
-        if (continuing && !pureRewrite(initial.turn.message)) {
+        if (
+          !initial.turn.continuation &&
+          continuing &&
+          !pureRewrite(initial.turn.message)
+        ) {
           decision.intent = "research";
           decision.goal = previousGoal!;
         }
@@ -305,6 +312,7 @@ export class HumanService {
       // 调用同一张研究图。此模式通过查询任务和审计展示状态，暂不保存 SSE 流。
       const projectGoal = initial.history?.[0]?.question ?? question;
       const continuing =
+        !initial.turn.continuation &&
         Boolean(initial.history?.length) &&
         /继续|刚才|补充|缩成|改成|修改|总结|short|revise|continue|more|followup/i.test(
           initial.turn.message,
@@ -330,7 +338,9 @@ export class HumanService {
           before: save,
           // 节点成功后保存合并后的状态及下一节点；规划后准备取证时要求人工批准。
           after: async (node, state, next, budget) => {
-            const pause = node === "planning" && next === "research";
+            const pause =
+              next === "research" &&
+              (node === "planning" || state.awaitingToolApproval === true);
             await this.store.change(id, key, (task) => {
               if (task.status !== "running" || task.owner !== owner)
                 throw new HumanConflict("任务执行权已失效。");
@@ -362,7 +372,7 @@ export class HumanService {
                   state.openQuestions.length
                     ? state.openQuestions
                     : state.plan.questions,
-                  `这一跳回答：${serves}。${state.plan.reason}${state.plan.action === "web" ? "；将向 Brave 发送查询并读取搜索摘要（非网页全文）。" : state.plan.action === "mcp" ? "；将通过 MCP 子进程读取可信目录中的一份本地文档，不联网、不写入。" : "；批准后执行本地检索。"}`,
+                  `这一跳回答：${serves}。${state.plan.reason}${state.plan.action === "web" ? "；将向 Brave 发送查询并读取搜索摘要（非网页全文）。" : state.plan.action === "mcp" ? "；将通过 MCP 子进程读取可信目录中的本地文档，不联网、不写入。" : "；批准后执行本地检索。"}`,
                 );
                 task.approval.goal = state.initialGoal || projectGoal;
                 task.approval.serves = serves;
@@ -382,6 +392,7 @@ export class HumanService {
         Math.max(1, this.timeoutMs - previous - (Date.now() - started)),
         continuing ? projectGoal : question,
         continuing ? seededOpenQuestions : [],
+        initial.turn.continuation === true,
       );
       // 图正常结束后再次确认执行权，再原子保存完成状态和报告。
       await this.store.change(id, key, (task) => {

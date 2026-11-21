@@ -205,6 +205,11 @@ it("pulls a drifted open question back to the initial goal", async () => {
     }),
   );
   expect(test.prompts[0]).toContain("初始目标（不可自行改写）");
+  expect(test.local.retrieve).toHaveBeenNthCalledWith(
+    2,
+    "为什么选择单库？",
+    expect.any(AbortSignal),
+  );
   expect(test.local.retrieve).toHaveBeenCalledTimes(2);
 });
 it("stops before spending more calls or reservation units than authorized", async () => {

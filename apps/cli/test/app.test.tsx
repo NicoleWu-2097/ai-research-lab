@@ -58,19 +58,39 @@ it("keeps approval at the prompt, shows call summaries, and follows up in the sa
   try {
     await new Promise((resolve) => setTimeout(resolve, 100));
     await enter("initial");
-    await vi.waitFor(() => expect(ui.lastFrame()).toContain("审批："), {
-      timeout: 2500,
-    });
-    // 每次调用默认可见，只有长输出才折叠。
-    expect(ui.lastFrame()).toContain("SECRET_TOOL_DETAIL");
-    expect(ui.lastFrame()!.indexOf("等待审批：")).toBeGreaterThan(
-      ui.lastFrame()!.indexOf("SECRET_TOOL_DETAIL"),
+    // 审批详情可能先于状态栏完成渲染，等待同一完整帧再验证位置。
+    await vi.waitFor(
+      () => {
+        const frame = ui.lastFrame()!;
+        expect(frame).toContain("审批：");
+        expect(frame).toContain("SECRET_TOOL_DETAIL");
+        expect(frame.indexOf("等待审批：")).toBeGreaterThan(
+          frame.indexOf("SECRET_TOOL_DETAIL"),
+        );
+      },
+      { timeout: 2500 },
     );
     await enter("/approve");
     await vi.waitFor(
       () => expect(ui.frames.join("\n")).toContain("最终报告正文"),
       { timeout: 2500 },
     );
+    await enter("/continue 优先找对照实验");
+    expect(
+      fetcher.mock.calls.some(
+        ([url, options]) =>
+          String(url).endsWith(`/${id}/continue`) &&
+          JSON.parse(String(options?.body)).instructions === "优先找对照实验",
+      ),
+    ).toBe(true);
+    await enter("/continue");
+    expect(
+      fetcher.mock.calls.some(
+        ([url, options]) =>
+          String(url).endsWith(`/${id}/continue`) &&
+          JSON.parse(String(options?.body)).instructions === "",
+      ),
+    ).toBe(true);
     await enter("make it shorter");
     expect(
       fetcher.mock.calls.some(
